@@ -14,7 +14,7 @@ load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 app.secret_key = os.getenv('SECRET_KEY', 'default_secret')
 
 # --- CONFIGURATION ---
