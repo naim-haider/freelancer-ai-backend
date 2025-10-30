@@ -14,7 +14,10 @@ load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# Allow CORS for all routes and methods
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
 app.secret_key = os.getenv('SECRET_KEY', 'default_secret')
 
 # --- CONFIGURATION ---
@@ -199,6 +202,13 @@ def login_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
+
+@app.route("/api/test", methods=["GET", "OPTIONS"])
+def test_cors():
+    if request.method == "OPTIONS":
+        # Handle preflight request
+        return jsonify({"status": "ok"}), 200
+    return jsonify({"message": "CORS working!"})
 
 
 @app.route('/login', methods=['GET', 'POST'])
