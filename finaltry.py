@@ -248,7 +248,6 @@ def login_required(f):
 
 #     # Instead of render_template:
 #     return jsonify({"message": "Login endpoint. Use POST with JSON credentials."})
-
 @app.route('/login', methods=['POST'])
 def login():
     """Authenticate user via Node backend and store JWT in session."""
@@ -260,9 +259,18 @@ def login():
         return jsonify({'success': False, 'error': 'email and password required'}), 400
 
     try:
-        # 🔹 Call your Node backend login endpoint
         node_api_url = os.getenv('NODE_API_URL')
+        if not node_api_url:
+            print("❌ NODE_API_URL not set")
+            return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
+
+        print(f"🔹 Sending login request to: {node_api_url}")
+        print(f"🔹 Email: {email}")
+
         response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
+        print(f"🔹 Node response status: {response.status_code}")
+        print(f"🔹 Node response body: {response.text}")
+
         response.raise_for_status()
 
         result = response.json()
@@ -271,15 +279,18 @@ def login():
         if not token:
             return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
 
-        # 🔹 Store JWT and username in session
         session['logged_in'] = True
         session['email'] = email
         session['token'] = token
+
         return jsonify({'success': True, 'token': token})
 
     except requests.exceptions.RequestException as e:
+        print("❌ RequestException:", e)
         return jsonify({'success': False, 'error': str(e)}), 500
-
+    except Exception as e:
+        print("❌ Unexpected error:", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/logout')
