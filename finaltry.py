@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 import os
 from flask_cors import CORS
 from dotenv import load_dotenv
+import jwt
 
 load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
@@ -25,11 +26,11 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 PROD_TOKEN = os.getenv('PROD_TOKEN')
 
 # Hardcoded users (username: password)
-USERS = {
-    os.getenv('ADMIN_USER', 'admin'): os.getenv('ADMIN_PASS', 'admin123'),
-    os.getenv('MACTIX_USER', 'mactix'): os.getenv('MACTIX_PASS', 'mactix2024'),
-    os.getenv('USER1', 'user1'): os.getenv('USER1_PASS', 'password123')
-}
+# USERS = {
+#     os.getenv('ADMIN_USER', 'admin'): os.getenv('ADMIN_PASS', 'admin123'),
+#     os.getenv('MACTIX_USER', 'mactix'): os.getenv('MACTIX_PASS', 'mactix2024'),
+#     os.getenv('USER1', 'user1'): os.getenv('USER1_PASS', 'password123')
+# }
 
 # Directory to store bids
 BIDS_ROOT = os.path.join(os.path.dirname(__file__), "bids")
@@ -195,38 +196,89 @@ def user_has_bid_on_link(username: str, link: str) -> bool:
 
 
 # Login required decorator
+# def login_required(f):
+#     @wraps(f)
+#     def decorated_function(*args, **kwargs):
+#         if 'logged_in' not in session:
+#             return redirect(url_for('login'))
+#         return f(*args, **kwargs)
+#     return decorated_function
+
+# @app.route("/api/test", methods=["GET", "OPTIONS"])
+# def test_cors():
+#     if request.method == "OPTIONS":
+#         # Handle preflight request
+#         return jsonify({"status": "ok"}), 200
+#     return jsonify({"message": "CORS working!"})
+
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'logged_in' not in session:
-            return redirect(url_for('login'))
+        token = session.get('token')
+        if not token:
+            return jsonify({'error': 'Unauthorized, please log in.'}), 401
+
+        try:
+            # Verify JWT using the Node backend's secret (or its public key if provided)
+            secret_key = os.getenv('JWT_SECRET')
+            decoded = jwt.decode(token, secret_key, algorithms=["HS256"])
+            session['email'] = decoded.get('email') or decoded.get('email')
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Session expired, please log in again.'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token.'}), 401
+
         return f(*args, **kwargs)
     return decorated_function
 
-@app.route("/api/test", methods=["GET", "OPTIONS"])
-def test_cors():
-    if request.method == "OPTIONS":
-        # Handle preflight request
-        return jsonify({"status": "ok"}), 200
-    return jsonify({"message": "CORS working!"})
 
+# @app.route('/login', methods=['GET', 'POST'])
+# def login():
+#     if request.method == 'POST':
+#         data = request.get_json()
+#         username = data.get('username', '').strip()
+#         password = data.get('password', '').strip()
 
-@app.route('/login', methods=['GET', 'POST'])
+#         if username in USERS and USERS[username] == password:
+#             session['logged_in'] = True
+#             session['username'] = username
+#             return jsonify({'success': True})
+#         else:
+#             return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+
+#     # Instead of render_template:
+#     return jsonify({"message": "Login endpoint. Use POST with JSON credentials."})
+
+@app.route('/login', methods=['POST'])
 def login():
-    if request.method == 'POST':
-        data = request.get_json()
-        username = data.get('username', '').strip()
-        password = data.get('password', '').strip()
+    """Authenticate user via Node backend and store JWT in session."""
+    data = request.get_json()
+    email = data.get('email', '').strip()
+    password = data.get('password', '').strip()
 
-        if username in USERS and USERS[username] == password:
-            session['logged_in'] = True
-            session['username'] = username
-            return jsonify({'success': True})
-        else:
-            return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+    if not email or not password:
+        return jsonify({'success': False, 'error': 'email and password required'}), 400
 
-    # Instead of render_template:
-    return jsonify({"message": "Login endpoint. Use POST with JSON credentials."})
+    try:
+        # 🔹 Call your Node backend login endpoint
+        node_api_url = os.getenv('NODE_API_URL')
+        response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
+        response.raise_for_status()
+
+        result = response.json()
+        token = result.get('token')
+
+        if not token:
+            return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
+
+        # 🔹 Store JWT and username in session
+        session['logged_in'] = True
+        session['email'] = email
+        session['token'] = token
+        return jsonify({'success': True, 'token': token})
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 
