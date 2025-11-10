@@ -10,6 +10,8 @@ import os
 from flask_cors import CORS
 from dotenv import load_dotenv
 import jwt
+import time
+from requests.exceptions import RequestException, HTTPError
 
 load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
@@ -258,40 +260,47 @@ def login():
     if not email or not password:
         return jsonify({'success': False, 'error': 'email and password required'}), 400
 
-    try:
-        node_api_url = os.getenv('NODE_API_URL')
-        if not node_api_url:
-            print("❌ NODE_API_URL not set")
-            return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
+    node_api_url = os.getenv('NODE_API_URL')
+    if not node_api_url:
+        return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
 
-        print(f"🔹 Sending login request to: {node_api_url}")
-        print(f"🔹 Email: {email}")
+    retries = 3
+    delay = 5  # seconds
 
-        response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
-        print(f"🔹 Node response status: {response.status_code}")
-        print(f"🔹 Node response body: {response.text}")
+    for attempt in range(retries):
+        try:
+            print(f"🔹 Attempt {attempt + 1}: sending login to {node_api_url}")
+            response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
 
-        response.raise_for_status()
+            if response.status_code == 429:
+                print(f"⚠️ Rate limited, waiting {delay}s before retry...")
+                time.sleep(delay)
+                delay *= 2  # exponential backoff
+                continue
 
-        result = response.json()
-        token = result.get('token')
+            response.raise_for_status()
+            result = response.json()
+            token = result.get('token')
 
-        if not token:
-            return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
+            if not token:
+                return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
 
-        session['logged_in'] = True
-        session['email'] = email
-        session['token'] = token
+            session['logged_in'] = True
+            session['email'] = email
+            session['token'] = token
+            return jsonify({'success': True, 'token': token})
 
-        return jsonify({'success': True, 'token': token})
+        except HTTPError as e:
+            print(f"❌ HTTPError: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+        except RequestException as e:
+            print(f"❌ RequestException: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+        except Exception as e:
+            print(f"❌ Unexpected error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
 
-    except requests.exceptions.RequestException as e:
-        print("❌ RequestException:", e)
-        return jsonify({'success': False, 'error': str(e)}), 500
-    except Exception as e:
-        print("❌ Unexpected error:", e)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
+    return jsonify({'success': False, 'error': 'Too many retries, please try again later'}), 500
 
 @app.route('/logout')
 def logout():
