@@ -281,6 +281,7 @@ def login():
             response.raise_for_status()
             result = response.json()
             token = result.get('token')
+            user = result.get('user')
 
             if not token:
                 return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
@@ -288,7 +289,7 @@ def login():
             session['logged_in'] = True
             session['email'] = email
             session['token'] = token
-            return jsonify({'success': True, 'token': token})
+            return jsonify({'success': True, 'token': token, 'user': user})
 
         except HTTPError as e:
             print(f"❌ HTTPError: {e}")
