@@ -12,11 +12,22 @@ from dotenv import load_dotenv
 import jwt
 import time
 from requests.exceptions import RequestException, HTTPError
+from routes.bid_routes import bid_bp
+from models.bid_model import create_bid, get_user_bids
+from bson import ObjectId
+from pymongo import MongoClient
 
 load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
 
 app = Flask(__name__)
+
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
+db = client["freelancer_bids"]
+bids_collection = db["bids"]
+
+app.register_blueprint(bid_bp)
 
 # Allow CORS for all routes and methods
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
@@ -27,191 +38,167 @@ app.secret_key = os.getenv('SECRET_KEY', 'default_secret')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 PROD_TOKEN = os.getenv('PROD_TOKEN')
 
-# Hardcoded users (username: password)
-# USERS = {
-#     os.getenv('ADMIN_USER', 'admin'): os.getenv('ADMIN_PASS', 'admin123'),
-#     os.getenv('MACTIX_USER', 'mactix'): os.getenv('MACTIX_PASS', 'mactix2024'),
-#     os.getenv('USER1', 'user1'): os.getenv('USER1_PASS', 'password123')
-# }
-
 # Directory to store bids
 BIDS_ROOT = os.path.join(os.path.dirname(__file__), "bids")
 
 
 # ----------------- Utilities for bid storage (file-based) -----------------
-def ensure_dir(path):
-    if not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
+# def ensure_dir(path):
+#     if not os.path.exists(path):
+#         os.makedirs(path, exist_ok=True)
 
 
-def month_folder_for(dt: date):
-    return os.path.join(BIDS_ROOT, f"{dt.year}-{dt.month:02d}")
+# def month_folder_for(dt: date):
+#     return os.path.join(BIDS_ROOT, f"{dt.year}-{dt.month:02d}")
 
 
-def user_file_for(dt: date, username: str):
-    folder = month_folder_for(dt)
-    ensure_dir(folder)
-    return os.path.join(folder, f"{username}.json")
+# def user_file_for(dt: date, username: str):
+#     folder = month_folder_for(dt)
+#     ensure_dir(folder)
+#     return os.path.join(folder, f"{username}.json")
 
 
-def load_user_bids_file(path):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        except Exception:
-            # if corrupt, return empty
-            return {}
-    return {}
+# def load_user_bids_file(path):
+#     if os.path.exists(path):
+#         try:
+#             with open(path, "r", encoding="utf-8") as fh:
+#                 return json.load(fh)
+#         except Exception:
+#             # if corrupt, return empty
+#             return {}
+#     return {}
 
 
-def save_user_bids_file(path, data):
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
+# def save_user_bids_file(path, data):
+#     with open(path, "w", encoding="utf-8") as fh:
+#         json.dump(data, fh, indent=2, ensure_ascii=False)
 
 
-def cleanup_old_data(keep_days=31):
-    """Remove bid files that are older than keep_days based on folder name YYYY-MM."""
-    cutoff_date = datetime.utcnow().date() - timedelta(days=keep_days)
-    if not os.path.exists(BIDS_ROOT):
-        return
-    for name in os.listdir(BIDS_ROOT):
-        folder_path = os.path.join(BIDS_ROOT, name)
-        if not os.path.isdir(folder_path):
-            continue
-        # folder name expected 'YYYY-MM'
-        try:
-            y, m = name.split("-")
-            folder_date = date(int(y), int(m), 1)
-        except Exception:
-            # unexpected folder name - skip
-            continue
-        if folder_date < date(cutoff_date.year, cutoff_date.month, 1):
-            try:
-                for f in os.listdir(folder_path):
-                    try:
-                        os.remove(os.path.join(folder_path, f))
-                    except Exception:
-                        pass
-                try:
-                    os.rmdir(folder_path)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+# def cleanup_old_data(keep_days=31):
+#     """Remove bid files that are older than keep_days based on folder name YYYY-MM."""
+#     cutoff_date = datetime.utcnow().date() - timedelta(days=keep_days)
+#     if not os.path.exists(BIDS_ROOT):
+#         return
+#     for name in os.listdir(BIDS_ROOT):
+#         folder_path = os.path.join(BIDS_ROOT, name)
+#         if not os.path.isdir(folder_path):
+#             continue
+#         # folder name expected 'YYYY-MM'
+#         try:
+#             y, m = name.split("-")
+#             folder_date = date(int(y), int(m), 1)
+#         except Exception:
+#             # unexpected folder name - skip
+#             continue
+#         if folder_date < date(cutoff_date.year, cutoff_date.month, 1):
+#             try:
+#                 for f in os.listdir(folder_path):
+#                     try:
+#                         os.remove(os.path.join(folder_path, f))
+#                     except Exception:
+#                         pass
+#                 try:
+#                     os.rmdir(folder_path)
+#                 except Exception:
+#                     pass
+#             except Exception:
+#                 pass
 
 
-def store_bid_local(username: str, title: str, link: str, amount: float, period: int, bid_text: str, status: str = "stored"):
-    """
-    Store a bid for username under today's date.
-    Data layout per user-file:
-    {
-      "YYYY-MM-DD": [
-         { "time": "HH:MM:SS", "title": "...", "link": "...", "amount": 50, "period": 7, "bid": "...", "status": "stored" }
-      ],
-      ...
-    }
-    """
-    cleanup_old_data(keep_days=31)
+# def store_bid_local(username: str, title: str, link: str, amount: float, period: int, bid_text: str, status: str = "stored"):
+#     """
+#     Store a bid for username under today's date.
+#     Data layout per user-file:
+#     {
+#       "YYYY-MM-DD": [
+#          { "time": "HH:MM:SS", "title": "...", "link": "...", "amount": 50, "period": 7, "bid": "...", "status": "stored" }
+#       ],
+#       ...
+#     }
+#     """
+#     cleanup_old_data(keep_days=31)
 
-    today = datetime.utcnow().date()
-    user_file = user_file_for(today, username)
-    data = load_user_bids_file(user_file)
+#     today = datetime.utcnow().date()
+#     user_file = user_file_for(today, username)
+#     data = load_user_bids_file(user_file)
 
-    day_key = today.isoformat()
-    entry = {
-        "time": datetime.utcnow().strftime("%H:%M:%S"),
-        "title": title,
-        "link": link,
-        "amount": amount,
-        "period": period,
-        "bid": bid_text,
-        "status": status
-    }
-    if day_key not in data:
-        data[day_key] = []
-    data[day_key].append(entry)
+#     day_key = today.isoformat()
+#     entry = {
+#         "time": datetime.utcnow().strftime("%H:%M:%S"),
+#         "title": title,
+#         "link": link,
+#         "amount": amount,
+#         "period": period,
+#         "bid": bid_text,
+#         "status": status
+#     }
+#     if day_key not in data:
+#         data[day_key] = []
+#     data[day_key].append(entry)
 
-    save_user_bids_file(user_file, data)
-    return True
-
-
-def gather_user_bids_for_month(username: str, year_month: str = None):
-    """
-    Return data for a given user for the month 'YYYY-MM' (defaults to current month).
-    """
-    if year_month is None:
-        now = datetime.utcnow()
-        year_month = f"{now.year}-{now.month:02d}"
-
-    folder = os.path.join(BIDS_ROOT, year_month)
-    if not os.path.exists(folder):
-        return {}
-
-    user_file = os.path.join(folder, f"{username}.json")
-    return load_user_bids_file(user_file)
+#     save_user_bids_file(user_file, data)
+#     return True
 
 
-def gather_all_users_bids_for_month(year_month: str = None):
-    """
-    Return a dict of {username: user_data} for every user file in the given month folder.
-    """
-    if year_month is None:
-        now = datetime.utcnow()
-        year_month = f"{now.year}-{now.month:02d}"
-    folder = os.path.join(BIDS_ROOT, year_month)
-    if not os.path.exists(folder):
-        return {}
-    result = {}
-    for fname in os.listdir(folder):
-        if not fname.endswith(".json"):
-            continue
-        username = fname[:-5]
-        path = os.path.join(folder, fname)
-        result[username] = load_user_bids_file(path)
-    return result
+# def gather_user_bids_for_month(username: str, year_month: str = None):
+#     """
+#     Return data for a given user for the month 'YYYY-MM' (defaults to current month).
+#     """
+#     if year_month is None:
+#         now = datetime.utcnow()
+#         year_month = f"{now.year}-{now.month:02d}"
+
+#     folder = os.path.join(BIDS_ROOT, year_month)
+#     if not os.path.exists(folder):
+#         return {}
+
+#     user_file = os.path.join(folder, f"{username}.json")
+#     return load_user_bids_file(user_file)
 
 
-def user_has_bid_on_link(username: str, link: str) -> bool:
-    """
-    Scan all month folders under BIDS_ROOT for a user file and check if any entry has the same link.
-    This uses exact string match. If you want normalized comparison, add normalization here.
-    """
-    if not os.path.exists(BIDS_ROOT):
-        return False
-    for month_folder in os.listdir(BIDS_ROOT):
-        folder_path = os.path.join(BIDS_ROOT, month_folder)
-        if not os.path.isdir(folder_path):
-            continue
-        user_file = os.path.join(folder_path, f"{username}.json")
-        if not os.path.exists(user_file):
-            continue
-        data = load_user_bids_file(user_file)
-        for day, entries in data.items():
-            for e in entries:
-                if e.get("link") == link:
-                    return True
-    return False
+# def gather_all_users_bids_for_month(year_month: str = None):
+#     """
+#     Return a dict of {username: user_data} for every user file in the given month folder.
+#     """
+#     if year_month is None:
+#         now = datetime.utcnow()
+#         year_month = f"{now.year}-{now.month:02d}"
+#     folder = os.path.join(BIDS_ROOT, year_month)
+#     if not os.path.exists(folder):
+#         return {}
+#     result = {}
+#     for fname in os.listdir(folder):
+#         if not fname.endswith(".json"):
+#             continue
+#         username = fname[:-5]
+#         path = os.path.join(folder, fname)
+#         result[username] = load_user_bids_file(path)
+#     return result
+
+
+# def user_has_bid_on_link(username: str, link: str) -> bool:
+#     """
+#     Scan all month folders under BIDS_ROOT for a user file and check if any entry has the same link.
+#     This uses exact string match. If you want normalized comparison, add normalization here.
+#     """
+#     if not os.path.exists(BIDS_ROOT):
+#         return False
+#     for month_folder in os.listdir(BIDS_ROOT):
+#         folder_path = os.path.join(BIDS_ROOT, month_folder)
+#         if not os.path.isdir(folder_path):
+#             continue
+#         user_file = os.path.join(folder_path, f"{username}.json")
+#         if not os.path.exists(user_file):
+#             continue
+#         data = load_user_bids_file(user_file)
+#         for day, entries in data.items():
+#             for e in entries:
+#                 if e.get("link") == link:
+#                     return True
+#     return False
 
 
 # ----------------- End bid storage utilities -----------------
-
-
-# Login required decorator
-# def login_required(f):
-#     @wraps(f)
-#     def decorated_function(*args, **kwargs):
-#         if 'logged_in' not in session:
-#             return redirect(url_for('login'))
-#         return f(*args, **kwargs)
-#     return decorated_function
-
-# @app.route("/api/test", methods=["GET", "OPTIONS"])
-# def test_cors():
-#     if request.method == "OPTIONS":
-#         # Handle preflight request
-#         return jsonify({"status": "ok"}), 200
-#     return jsonify({"message": "CORS working!"})
 
 def login_required(f):
     @wraps(f)
@@ -233,23 +220,6 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-
-# @app.route('/login', methods=['GET', 'POST'])
-# def login():
-#     if request.method == 'POST':
-#         data = request.get_json()
-#         username = data.get('username', '').strip()
-#         password = data.get('password', '').strip()
-
-#         if username in USERS and USERS[username] == password:
-#             session['logged_in'] = True
-#             session['username'] = username
-#             return jsonify({'success': True})
-#         else:
-#             return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
-
-#     # Instead of render_template:
-#     return jsonify({"message": "Login endpoint. Use POST with JSON credentials."})
 @app.route('/login', methods=['POST'])
 def login():
     """Authenticate user via Node backend and store JWT in session."""
@@ -265,7 +235,7 @@ def login():
         return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
 
     retries = 3
-    delay = 5  # seconds
+    delay = 5 
 
     for attempt in range(retries):
         try:
@@ -555,7 +525,7 @@ def place_bid():
         return jsonify({'error': 'Project ID and bid text required'}), 400
 
     # --- Duplicate Check ---
-    if user_has_bid_on_link(username, project_url):
+    if bids_collection.find_one({"user_email": username, "link": project_url}):
         return jsonify({
             'success': False,
             'message': 'Already bid'
@@ -606,9 +576,9 @@ def place_bid():
     except requests.exceptions.RequestException:
         external_status = "error"
 
-    # --- Always store locally ---
-    store_bid_local(
-        username=username,
+# --- Store bid in MongoDB ---
+    create_bid(
+        user_email=username,
         title=project_title,
         link=project_url,
         amount=amount,
@@ -639,37 +609,37 @@ def place_bid():
         }), 202
 # -------------------- Bid Insight routes --------------------
 
-@app.route('/bid_insight')
-@login_required
-def bid_insight_page():
-    username = session.get('username')
-    is_admin = username == 'admin'
-    return jsonify({"message": "Bid insight page (handled by React)", "user": username, "admin": is_admin})
+# @app.route('/bid_insight')
+# @login_required
+# def bid_insight_page():
+#     username = session.get('username')
+#     is_admin = username == 'admin'
+#     return jsonify({"message": "Bid insight page (handled by React)", "user": username, "admin": is_admin})
 
 
 
-@app.route('/api/bid_insight', methods=['GET'])
-@login_required
-def api_bid_insight():
-    """
-    Returns JSON structure with bids for the current month.
-    If admin, returns all users.
-    Accepts optional query param month=YYYY-MM to fetch another month (if available).
-    """
-    username = session.get('username')
-    is_admin = (username == 'admin')
+# @app.route('/api/bid_insight', methods=['GET'])
+# @login_required
+# def api_bid_insight():
+#     """
+#     Returns JSON structure with bids for the current month.
+#     If admin, returns all users.
+#     Accepts optional query param month=YYYY-MM to fetch another month (if available).
+#     """
+#     username = session.get('username')
+#     is_admin = (username == 'admin')
 
-    month = request.args.get('month')
-    if not month:
-        now = datetime.utcnow()
-        month = f"{now.year}-{now.month:02d}"
+#     month = request.args.get('month')
+#     if not month:
+#         now = datetime.utcnow()
+#         month = f"{now.year}-{now.month:02d}"
 
-    if is_admin:
-        all_data = gather_all_users_bids_for_month(month)
-        return jsonify({"month": month, "data": all_data})
-    else:
-        user_data = gather_user_bids_for_month(username, month)
-        return jsonify({"month": month, "data": {username: user_data}})
+#     if is_admin:
+#         all_data = gather_all_users_bids_for_month(month)
+#         return jsonify({"month": month, "data": all_data})
+#     else:
+#         user_data = gather_user_bids_for_month(username, month)
+#         return jsonify({"month": month, "data": {username: user_data}})
 
 # -------------------- CUSTOM PROMPT BUILDER --------------------
 def create_personalized_prompt(project, user_details):
