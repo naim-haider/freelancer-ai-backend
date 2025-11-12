@@ -41,243 +41,8 @@ PROD_TOKEN = os.getenv('PROD_TOKEN')
 # Directory to store bids
 BIDS_ROOT = os.path.join(os.path.dirname(__file__), "bids")
 
-
-# ----------------- Utilities for bid storage (file-based) -----------------
-# def ensure_dir(path):
-#     if not os.path.exists(path):
-#         os.makedirs(path, exist_ok=True)
-
-
-# def month_folder_for(dt: date):
-#     return os.path.join(BIDS_ROOT, f"{dt.year}-{dt.month:02d}")
-
-
-# def user_file_for(dt: date, username: str):
-#     folder = month_folder_for(dt)
-#     ensure_dir(folder)
-#     return os.path.join(folder, f"{username}.json")
-
-
-# def load_user_bids_file(path):
-#     if os.path.exists(path):
-#         try:
-#             with open(path, "r", encoding="utf-8") as fh:
-#                 return json.load(fh)
-#         except Exception:
-#             # if corrupt, return empty
-#             return {}
-#     return {}
-
-
-# def save_user_bids_file(path, data):
-#     with open(path, "w", encoding="utf-8") as fh:
-#         json.dump(data, fh, indent=2, ensure_ascii=False)
-
-
-# def cleanup_old_data(keep_days=31):
-#     """Remove bid files that are older than keep_days based on folder name YYYY-MM."""
-#     cutoff_date = datetime.utcnow().date() - timedelta(days=keep_days)
-#     if not os.path.exists(BIDS_ROOT):
-#         return
-#     for name in os.listdir(BIDS_ROOT):
-#         folder_path = os.path.join(BIDS_ROOT, name)
-#         if not os.path.isdir(folder_path):
-#             continue
-#         # folder name expected 'YYYY-MM'
-#         try:
-#             y, m = name.split("-")
-#             folder_date = date(int(y), int(m), 1)
-#         except Exception:
-#             # unexpected folder name - skip
-#             continue
-#         if folder_date < date(cutoff_date.year, cutoff_date.month, 1):
-#             try:
-#                 for f in os.listdir(folder_path):
-#                     try:
-#                         os.remove(os.path.join(folder_path, f))
-#                     except Exception:
-#                         pass
-#                 try:
-#                     os.rmdir(folder_path)
-#                 except Exception:
-#                     pass
-#             except Exception:
-#                 pass
-
-
-# def store_bid_local(username: str, title: str, link: str, amount: float, period: int, bid_text: str, status: str = "stored"):
-#     """
-#     Store a bid for username under today's date.
-#     Data layout per user-file:
-#     {
-#       "YYYY-MM-DD": [
-#          { "time": "HH:MM:SS", "title": "...", "link": "...", "amount": 50, "period": 7, "bid": "...", "status": "stored" }
-#       ],
-#       ...
-#     }
-#     """
-#     cleanup_old_data(keep_days=31)
-
-#     today = datetime.utcnow().date()
-#     user_file = user_file_for(today, username)
-#     data = load_user_bids_file(user_file)
-
-#     day_key = today.isoformat()
-#     entry = {
-#         "time": datetime.utcnow().strftime("%H:%M:%S"),
-#         "title": title,
-#         "link": link,
-#         "amount": amount,
-#         "period": period,
-#         "bid": bid_text,
-#         "status": status
-#     }
-#     if day_key not in data:
-#         data[day_key] = []
-#     data[day_key].append(entry)
-
-#     save_user_bids_file(user_file, data)
-#     return True
-
-
-# def gather_user_bids_for_month(username: str, year_month: str = None):
-#     """
-#     Return data for a given user for the month 'YYYY-MM' (defaults to current month).
-#     """
-#     if year_month is None:
-#         now = datetime.utcnow()
-#         year_month = f"{now.year}-{now.month:02d}"
-
-#     folder = os.path.join(BIDS_ROOT, year_month)
-#     if not os.path.exists(folder):
-#         return {}
-
-#     user_file = os.path.join(folder, f"{username}.json")
-#     return load_user_bids_file(user_file)
-
-
-# def gather_all_users_bids_for_month(year_month: str = None):
-#     """
-#     Return a dict of {username: user_data} for every user file in the given month folder.
-#     """
-#     if year_month is None:
-#         now = datetime.utcnow()
-#         year_month = f"{now.year}-{now.month:02d}"
-#     folder = os.path.join(BIDS_ROOT, year_month)
-#     if not os.path.exists(folder):
-#         return {}
-#     result = {}
-#     for fname in os.listdir(folder):
-#         if not fname.endswith(".json"):
-#             continue
-#         username = fname[:-5]
-#         path = os.path.join(folder, fname)
-#         result[username] = load_user_bids_file(path)
-#     return result
-
-
-# def user_has_bid_on_link(username: str, link: str) -> bool:
-#     """
-#     Scan all month folders under BIDS_ROOT for a user file and check if any entry has the same link.
-#     This uses exact string match. If you want normalized comparison, add normalization here.
-#     """
-#     if not os.path.exists(BIDS_ROOT):
-#         return False
-#     for month_folder in os.listdir(BIDS_ROOT):
-#         folder_path = os.path.join(BIDS_ROOT, month_folder)
-#         if not os.path.isdir(folder_path):
-#             continue
-#         user_file = os.path.join(folder_path, f"{username}.json")
-#         if not os.path.exists(user_file):
-#             continue
-#         data = load_user_bids_file(user_file)
-#         for day, entries in data.items():
-#             for e in entries:
-#                 if e.get("link") == link:
-#                     return True
-#     return False
-
-
-# ----------------- End bid storage utilities -----------------
-
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        token = session.get('token')
-        if not token:
-            return jsonify({'error': 'Unauthorized, please log in.'}), 401
-
-        try:
-            # Verify JWT using the Node backend's secret (or its public key if provided)
-            secret_key = os.getenv('JWT_SECRET')
-            decoded = jwt.decode(token, secret_key, algorithms=["HS256"])
-            session['email'] = decoded.get('email') or decoded.get('email')
-        except jwt.ExpiredSignatureError:
-            return jsonify({'error': 'Session expired, please log in again.'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'error': 'Invalid token.'}), 401
-
-        return f(*args, **kwargs)
-    return decorated_function
-
-@app.route('/login', methods=['POST'])
-def login():
-    """Authenticate user via Node backend and store JWT in session."""
-    data = request.get_json()
-    email = data.get('email', '').strip()
-    password = data.get('password', '').strip()
-
-    if not email or not password:
-        return jsonify({'success': False, 'error': 'email and password required'}), 400
-
-    node_api_url = os.getenv('NODE_API_URL')
-    if not node_api_url:
-        return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
-
-    try:
-        print(f"🔹 Sending login to NodeJS backend: {node_api_url}")
-        response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
-
-        if response.status_code == 429:
-            return jsonify({'success': False, 'error': 'Too many requests — please wait a minute and try again.'}), 429
-
-        response.raise_for_status()
-        result = response.json()
-
-        token = result.get('token')
-        user = result.get('user')
-
-        if not token:
-            return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
-
-        session['logged_in'] = True
-        session['email'] = email
-        session['token'] = token
-
-        return jsonify({'success': True, 'token': token, 'user': user})
-
-    except HTTPError as e:
-        return jsonify({'success': False, 'error': f"HTTP error: {e}"}), 500
-    except RequestException as e:
-        return jsonify({'success': False, 'error': f"Connection error: {e}"}), 500
-    except Exception as e:
-        return jsonify({'success': False, 'error': f"Unexpected error: {e}"}), 500
-
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('login'))
-
-
-@app.route('/')
-@login_required
-def index():
-    return jsonify({"message": "Flask backend running!", "user": session.get('username')})
-
-
-
 @app.route('/search', methods=['POST'])
-@login_required
+# @login_required
 def search_projects():
     data = request.get_json()
     query = data.get('query', "").strip() if data else ""
@@ -423,9 +188,161 @@ def search_projects():
 
     return jsonify(projects)
 
+@app.route('/search_with_id', methods=['POST'])
+# @login_required
+def search_with_id():
+    import time
+    data = request.get_json()
+    start_id = data.get('start_id')
+    
+    if not start_id:
+        return jsonify({"error": "Project ID is required"}), 400
+    
+    try:
+        start_id = int(start_id)
+    except ValueError:
+        return jsonify({"error": "Invalid project ID"}), 400
+
+    HEADERS = {
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Freelancer-OAuth-V1": PROD_TOKEN
+    }
+
+    projects = []
+    project_ids_checked = []
+    current_id = start_id
+    max_attempts = 50  
+    attempts = 0
+
+    print(f"🔍 Starting project search from ID {start_id} ...")
+
+    while len(projects) < 20 and attempts < max_attempts:
+        project_id = current_id
+        project_ids_checked.append(project_id)
+
+        try:
+            url = f"https://www.freelancer.com/api/projects/0.1/projects/{project_id}/?full_description=true"
+            r = requests.get(url, headers=HEADERS, timeout=10)
+
+            # --- Handle Rate Limiting ---
+            if r.status_code == 429:
+                retry_after = int(r.headers.get("Retry-After", 5))
+                print(f"⚠️ Rate limit hit at project {project_id}. Waiting {retry_after}s...")
+                time.sleep(retry_after)
+                continue
+
+            # --- Handle successful project fetch ---
+            if r.status_code == 200:
+                response_data = r.json()
+                if response_data.get('status') == 'success':
+                    project = response_data.get('result')
+                    if project:
+                        projects.append(project)
+                        print(f"✅ Project {project_id} added ({len(projects)} found)")
+            else:
+                print(f"⏭️ Skipping project {project_id}, HTTP {r.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Error fetching project {project_id}: {e}")
+
+        # Delay between requests to prevent API rate limit
+        time.sleep(0.3)
+        current_id += 1
+        attempts += 1
+
+    # --- No projects found case ---
+    if not projects:
+        return jsonify({
+            "error": "No projects found in this ID range",
+            "checked_ids": project_ids_checked
+        }), 404
+
+    # --- Collect all unique owner IDs ---
+    owner_ids = list(set(p.get('owner_id') for p in projects if p.get('owner_id')))
+    clients_data = {}
+
+    # --- Fetch all client data in bulk ---
+    if owner_ids:
+        try:
+            user_ids_param = '&'.join([f'users[]={uid}' for uid in owner_ids])
+            users_url = f"https://www.freelancer.com/api/users/0.1/users/?{user_ids_param}&employer_reputation=true&jobs=true"
+            
+            users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+            if users_response.status_code == 429:
+                retry_after = int(users_response.headers.get("Retry-After", 5))
+                print(f"Rate limit hit while fetching users. Waiting {retry_after}s...")
+                time.sleep(retry_after)
+                users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+            users_response.raise_for_status()
+            users_result = users_response.json()
+
+            if users_result.get('status') == 'success':
+                clients_data = users_result.get('result', {}).get('users', {})
+
+        except requests.exceptions.RequestException as e:
+            print(f"Warning: Could not fetch client data: {e}")
+
+    # --- Format the data for frontend ---
+    formatted_projects = []
+    for project in projects:
+        budget_info = project.get('budget', {}) or {}
+        currency_info = project.get('currency', {}) or {}
+        bid_stats = project.get('bid_stats', {}) or {}
+        owner_id = project.get('owner_id')
+
+        client_info = clients_data.get(str(owner_id), {}) if owner_id else {}
+        employer_reputation = client_info.get('employer_reputation', {}) or {}
+        entire_history = employer_reputation.get('entire_history', {}) or {}
+        location = client_info.get('location', {}) or {}
+        country_info = location.get('country', {}) or {}
+
+        formatted_projects.append({
+            'id': project.get('id'),
+            'seo_url': project.get('seo_url'),
+            'title': project.get('title', 'N/A'),
+            'preview_description': (project.get('preview_description') or '').strip(),
+            'description': (project.get('description') or '').strip(),
+            'budget': {
+                'minimum': budget_info.get('minimum', 0),
+                'maximum': budget_info.get('maximum', 0)
+            },
+            'currency': {
+                'code': currency_info.get('code', 'NA')
+            },
+            'bid_stats': {
+                'bid_count': bid_stats.get('bid_count', 0),
+                'bid_avg': round(float(bid_stats.get('bid_avg') or 0), 2)
+            },
+            'client': {
+                'id': owner_id,
+                'country': country_info.get('name', 'N/A'),
+                'rating': {
+                    'overall': entire_history.get('overall'),
+                    'on_budget': entire_history.get('on_budget'),
+                    'on_time': entire_history.get('on_time'),
+                    'positive': entire_history.get('positive'),
+                    'reviews': entire_history.get('reviews'),
+                    'completion_rate': entire_history.get('completion_rate'),
+                },
+            }
+        })
+
+    print(f"Search complete: {len(formatted_projects)} valid projects found from ID {start_id} to {current_id - 1}")
+
+    return jsonify({
+        'projects': formatted_projects,
+        'start_id': start_id,
+        'end_id': current_id - 1,
+        'total_found': len(formatted_projects),
+        'checked_ids': project_ids_checked
+    })
+
 
 @app.route('/generate', methods=['POST'])
-@login_required
+# @login_required
 def generate_bid_route():
     """Generate a custom bid in your required structure."""
     data = request.get_json()
@@ -457,7 +374,7 @@ def generate_bid_route():
 
 
 @app.route('/generate_graphics', methods=['POST'])
-@login_required
+# @login_required
 def generate_graphics_bid():
     """Generate a static graphics bid with project details."""
     data = request.get_json()
@@ -493,7 +410,7 @@ Team Mactix"""
 
 
 @app.route('/place_bid', methods=['POST'])
-@login_required
+# @login_required
 def place_bid():
     """
     Places a bid via Freelancer API (if possible)
@@ -597,39 +514,6 @@ def place_bid():
             "success": True,
             "message": "✅ Bid saved locally (API not available)."
         }), 202
-# -------------------- Bid Insight routes --------------------
-
-# @app.route('/bid_insight')
-# @login_required
-# def bid_insight_page():
-#     username = session.get('username')
-#     is_admin = username == 'admin'
-#     return jsonify({"message": "Bid insight page (handled by React)", "user": username, "admin": is_admin})
-
-
-
-# @app.route('/api/bid_insight', methods=['GET'])
-# @login_required
-# def api_bid_insight():
-#     """
-#     Returns JSON structure with bids for the current month.
-#     If admin, returns all users.
-#     Accepts optional query param month=YYYY-MM to fetch another month (if available).
-#     """
-#     username = session.get('username')
-#     is_admin = (username == 'admin')
-
-#     month = request.args.get('month')
-#     if not month:
-#         now = datetime.utcnow()
-#         month = f"{now.year}-{now.month:02d}"
-
-#     if is_admin:
-#         all_data = gather_all_users_bids_for_month(month)
-#         return jsonify({"month": month, "data": all_data})
-#     else:
-#         user_data = gather_user_bids_for_month(username, month)
-#         return jsonify({"month": month, "data": {username: user_data}})
 
 # -------------------- CUSTOM PROMPT BUILDER --------------------
 def create_personalized_prompt(project, user_details):
@@ -638,79 +522,108 @@ def create_personalized_prompt(project, user_details):
     description = project.get('description', '')
     budget = project.get('budget', {})
     currency = project.get('currency', {}).get('code', 'USD')
-
+    
     min_b = budget.get('minimum', 0)
     max_b = budget.get('maximum', 0)
     budget_text = f"Budget: {min_b}-{max_b} {currency}" if min_b and max_b else ""
-
+    
     return f"""
-You are a professional bid writer at Mactix Global Solutions. 
-Your job is to create a highly persuasive bid under 1500 characters 
-based on the project details below.
+You are a professional bid writer at Mactix Global Solutions.
+Write a compelling bid that MUST be under 1400 characters.
 
-Project Title: {title}
+PROJECT CONTEXT:
+Title: {title}
 Description: {description}
 {budget_text}
 
-Write the bid in this exact structure (strictly maintain formatting):
+Write the bid in this EXACT format:
 
-Dear Hiring Manager, 
-Greetings from Mactix Global Solutions!
+Hi there,
 
-Project Scope:
-Summarize in 2-3 lines what this project is about and what client needs.
+I understand you need [restate their main requirement in 3-4 sentences using details from description]. [Mention their key priority or concern].
 
-Our Approach:
-Describe in 3-4 lines how we'll deliver it successfully — clear, confident, human tone.
+Here's my approach:
+* [Specific technical deliverable with methodology - 12-14 words]
+* [User experience or interface feature - 10-12 words]
+* [Additional value/feature - 10-12 words]
+* [Documentation or support deliverable - 10-12 words]
+* First working prototype delivered within [X] days
+* All source code and documentation included
 
-We specialize in:
-- Web & Mobile App Development
-- UI/UX Design
-- Frontend (React.js, Next.js) Backend (Node.js, JAVA)
-- Python, AI/ML
-- DevOps, AWS, GCP, Azure
-- SEO & Digital Marketing
+We specialize in [mention 2-3 technologies/skills directly relevant to this project]. I've built similar [project type] for clients in [relevant industries].
 
-live work:
-https://imecommunity.com
-https://mentaljoga.com.pl
-https://fortanden.dk
-https://lostontheroute.com
-https://www.healthyadhd.com
-https://www.virayo.com
-https://bmostadium.com
-https://becurioustravel.com
-https://bcbagelshop.com
-https://www.delightoffice.hr 
+Recent work: https://www.mactix.com/projects
+Logo, Graphics and Branding Work: https://www.mactix.com/freelancer
 
-Websites Work:
-https://www.mactix.com/projects
+Quick questions:
+1. [Practical clarification question about requirements - max 12 words]
+2. [Question about preferences or technical details - max 12 words]
 
-Logo and Graphics Work:
-https://www.mactix.com/freelancer
+I can start immediately and have the first working version ready for your review within [timeframe]. Unlimited revisions until it meets your exact needs.
 
-Questions for you:
-1. [First simple question based on the project]
-2. [Second simple question based on the project]
+Let's discuss the details.
 
-We look forward to collaborating with you. Please feel free to reach out for any clarifications.
-Warm regards,
+Best regards,
 Team Mactix
 
-Rules:
-- Keep total bid under 1500 characters.
-- Do NOT use markdown symbols (** or _).
-- Use natural, human-friendly tone.
-- Avoid emojis, hashtags, or robotic language.
-- Ensure the result looks like it was typed by a professional business development manager.
-- Keep Project Scope concise (2-3 lines).
-- Keep Our Approach focused (3-4 lines).
-- Ask TWO simple, easy-to-answer questions that are directly relevant to the project description.
-- Each question must be on a SEPARATE LINE numbered as 1. and 2.
-- Questions should demonstrate you understand the requirements and want basic clarifications.
-- Keep questions straightforward - avoid complex or technical questions.
-"""
+CRITICAL CONSTRAINTS:
+- TOTAL LENGTH: Maximum 1400 characters (count carefully!)
+- Opening paragraph: 2-3 sentences, max 300 characters
+- Approach bullets: 6 items, each 10-14 words maximum
+- Expertise paragraph: 2 sentences, max 250 characters
+- Portfolio: Keep exact format provided (2 lines)
+- Questions: 2 questions, each max 12 words
+- Closing: 3 sentences, max 150 characters
 
+MANDATORY RULES:
+1. Use asterisk (*) for bullet points, NOT (•)
+2. NO markdown formatting (**, __, etc.)
+3. NO emojis
+4. Mention SPECIFIC technologies/tools from their description
+5. Keep it concise - remove ALL unnecessary words
+6. Use SHORT sentences (10-15 words each)
+7. Only mention technologies relevant to THIS specific project
+8. Questions must be practical and easy to answer
+9. Timeline must be realistic: 24-48h simple, 3-7 days complex
+
+CHARACTER SAVING TIPS:
+- Use "I've" instead of "I have"
+- Use "you need" instead of "you are looking for"
+- Combine related ideas into single sentences
+- Remove filler words: very, really, quite, just, actually
+- Use commas instead of "and" where possible
+
+EXAMPLE FORMAT (DO NOT COPY, just follow structure):
+Hi there,
+
+I understand you need a [specific solution]. [Their priority].
+
+Here's my approach:
+* [Technical approach - brief]
+* [Feature/functionality - brief]
+* [Added value - brief]
+* [Support/docs - brief]
+* First prototype within X days
+* All files included
+
+We specialize in [2-3 relevant skills]. I've built similar [type] for [industry] clients.
+
+Recent work: https://www.mactix.com/projects
+Logo, Graphics and Branding Work: https://www.mactix.com/freelancer
+
+Quick questions:
+1. [Short question]
+2. [Short question]
+
+I can start immediately and deliver within [time]. Unlimited revisions.
+
+Let's discuss the details.
+
+Best regards,
+Team Mactix
+
+Now write the bid. Count characters and ensure it's under 1400.
+"""
 
 def open_browser():
     webbrowser.open_new("http://127.0.0.1:5000")

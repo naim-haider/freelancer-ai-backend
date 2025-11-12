@@ -43,12 +43,6 @@ def get_my_bids():
 
 
 def get_all_user_bids():
-    user_email = session.get("email")
-    role = session.get("role")
-
-    if role not in ["admin", "super-admin"]:
-        return jsonify({"success": False, "error": "Access denied"}), 403
-
     bids = get_all_bids()
     for bid in bids:
         bid["_id"] = str(bid["_id"])
