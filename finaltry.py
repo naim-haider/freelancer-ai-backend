@@ -234,44 +234,34 @@ def login():
     if not node_api_url:
         return jsonify({'success': False, 'error': 'Backend URL not configured'}), 500
 
-    retries = 3
-    delay = 5 
+    try:
+        print(f"🔹 Sending login to NodeJS backend: {node_api_url}")
+        response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
 
-    for attempt in range(retries):
-        try:
-            print(f"🔹 Attempt {attempt + 1}: sending login to {node_api_url}")
-            response = requests.post(node_api_url, json={'email': email, 'password': password}, timeout=15)
+        if response.status_code == 429:
+            return jsonify({'success': False, 'error': 'Too many requests — please wait a minute and try again.'}), 429
 
-            if response.status_code == 429:
-                print(f"⚠️ Rate limited, waiting {delay}s before retry...")
-                time.sleep(delay)
-                delay *= 2  # exponential backoff
-                continue
+        response.raise_for_status()
+        result = response.json()
 
-            response.raise_for_status()
-            result = response.json()
-            token = result.get('token')
-            user = result.get('user')
+        token = result.get('token')
+        user = result.get('user')
 
-            if not token:
-                return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
+        if not token:
+            return jsonify({'success': False, 'error': 'Token not provided by Node backend'}), 401
 
-            session['logged_in'] = True
-            session['email'] = email
-            session['token'] = token
-            return jsonify({'success': True, 'token': token, 'user': user})
+        session['logged_in'] = True
+        session['email'] = email
+        session['token'] = token
 
-        except HTTPError as e:
-            print(f"❌ HTTPError: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
-        except RequestException as e:
-            print(f"❌ RequestException: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-            return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': True, 'token': token, 'user': user})
 
-    return jsonify({'success': False, 'error': 'Too many retries, please try again later'}), 500
+    except HTTPError as e:
+        return jsonify({'success': False, 'error': f"HTTP error: {e}"}), 500
+    except RequestException as e:
+        return jsonify({'success': False, 'error': f"Connection error: {e}"}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': f"Unexpected error: {e}"}), 500
 
 @app.route('/logout')
 def logout():
