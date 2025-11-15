@@ -9,10 +9,11 @@ client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 bids_collection = db["bids"]
 
-def create_bid(user_email, title, link, amount, period, bid_text, status="stored"):
+def create_bid(user_email, title, role, link, amount, period, bid_text, status="stored"):
     bid_data = {
         "user_email": user_email,
         "title": title,
+        "role":role,
         "link": link,
         "amount": amount,
         "period": period,

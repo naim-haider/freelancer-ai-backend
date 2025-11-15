@@ -16,6 +16,7 @@ def add_bid():
         return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     title = data.get("title")
+    role = data.get("role")
     link = data.get("link")
     amount = data.get("amount")
     period = data.get("period")
