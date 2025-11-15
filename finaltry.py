@@ -5,7 +5,7 @@ import json
 import webbrowser
 import threading
 from functools import wraps
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone
 import os
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -495,6 +495,10 @@ def place_bid():
             "error": str(err)
         }), 500
     
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+    current_ist = datetime.now(IST).replace(tzinfo=None)
+    
     # Store bid in MongoDB with user information
     bid_data = {
         "user_id": user_id,
@@ -508,8 +512,8 @@ def place_bid():
         "period": period,
         "bid_text": bid_text,
         "status": external_status,
-        "created_at": datetime.now(ist),
-        "updated_at": datetime.now(ist)
+        "created_at": current_ist,
+        "updated_at": current_ist
     }
     
     result = bids_collection.insert_one(bid_data)
