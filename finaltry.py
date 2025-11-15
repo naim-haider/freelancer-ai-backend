@@ -16,6 +16,9 @@ from routes.bid_routes import bid_bp
 from models.bid_model import create_bid, get_user_bids
 from bson import ObjectId
 from pymongo import MongoClient
+import pytz
+
+ist = pytz.timezone("Asia/Kolkata")
 
 load_dotenv()
 sys.stdout.reconfigure(encoding='utf-8')
@@ -410,7 +413,7 @@ Team Mactix"""
 def place_bid():
     """
     Places a bid and stores it in MongoDB with user information from frontend.
-    Expects user_id, user_email, and username in the request body.
+    Expects user_id, user_email, and role in the request body.
     """
     data = request.get_json() or {}
 
@@ -436,8 +439,8 @@ def place_bid():
 
     # Duplicate Check - check if user already bid on this project
     existing_bid = bids_collection.find_one({
-        "user_id": user_id,
-        "link": project_url
+    "user_id": user_id,
+    "project_id": project_id
     })
     
     if existing_bid:
@@ -483,14 +486,15 @@ def place_bid():
             json=bid_payload,
             timeout=30
         )
-        external_response = r.json()
-        if r.status_code < 400:
-            external_status = "sent"
-        else:
-            external_status = "error"
-    except requests.exceptions.RequestException:
-        external_status = "error"
-
+        r.raise_for_status()
+    except Exception as err:
+        # ❌ DO NOT SAVE IN DB
+        return jsonify({
+            "success": False,
+            "message": "❌ Failed to submit bid to Freelancer API.",
+            "error": str(err)
+        }), 500
+    
     # Store bid in MongoDB with user information
     bid_data = {
         "user_id": user_id,
@@ -504,33 +508,40 @@ def place_bid():
         "period": period,
         "bid_text": bid_text,
         "status": external_status,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.now(ist),
+        "updated_at": datetime.now(ist)
     }
     
     result = bids_collection.insert_one(bid_data)
 
-    # Return response
-    if external_status == "sent":
-        return jsonify({
-            "success": True,
-            "message": "✅ Bid sent successfully!",
-            "bid_id": str(result.inserted_id),
-            "external": external_response
-        }), 200
-    elif external_status == "error":
-        return jsonify({
-            "success": True,
-            "message": "⚠️ Bid stored locally (Freelancer API failed).",
-            "bid_id": str(result.inserted_id),
-            "external": external_response
-        }), 202
-    else:
-        return jsonify({
-            "success": True,
-            "message": "✅ Bid saved locally (API not available).",
-            "bid_id": str(result.inserted_id)
-        }), 202
+    return jsonify({
+        "success": True,
+        "message": "✅ Bid sent successfully and stored!",
+        "bid_id": str(result.inserted_id),
+        "external": r.json()
+    }), 200
+    # # Return response
+    # if external_status == "sent":
+    #     return jsonify({
+    #         "success": True,
+    #         "message": "✅ Bid sent successfully!",
+    #         "bid_id": str(result.inserted_id),
+    #         "external": external_response
+    #     }), 200
+    # elif external_status == "error":
+    #     return jsonify({
+    #         "success": True,
+    #         "message": "⚠️ Bid stored locally (Freelancer API failed).",
+    #         "bid_id": str(result.inserted_id),
+    #         "external": external_response
+    #     }), 202
+    # else:
+    #     return jsonify({
+    #         "success": True,
+    #         "message": "✅ Bid saved locally (API not available).",
+    #         "bid_id": str(result.inserted_id)
+    #     }), 202
+    
     
 
 @app.route('/api/bids/tracker', methods=['GET'])
