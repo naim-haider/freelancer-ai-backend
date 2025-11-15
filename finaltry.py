@@ -555,7 +555,7 @@ def get_bid_tracker():
     else:
         end_date = datetime(year, month + 1, 1)
     
-    if user_role == 'admin':
+    if user_role in ['admin', 'super-admin']:
         # Get all bids for all users
         pipeline = [
             {
