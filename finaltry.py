@@ -38,9 +38,6 @@ app.secret_key = os.getenv('SECRET_KEY', 'default_secret')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 PROD_TOKEN = os.getenv('PROD_TOKEN')
 
-# Directory to store bids
-BIDS_ROOT = os.path.join(os.path.dirname(__file__), "bids")
-
 @app.route('/search', methods=['POST'])
 # @login_required
 def search_projects():
@@ -410,35 +407,46 @@ Team Mactix"""
 
 
 @app.route('/place_bid', methods=['POST'])
-# @login_required
 def place_bid():
     """
-    Places a bid via Freelancer API (if possible)
-    and always stores locally with duplicate prevention.
+    Places a bid and stores it in MongoDB with user information from frontend.
+    Expects user_id, user_email, and username in the request body.
     """
     data = request.get_json() or {}
 
+    # Project details
     project_id = data.get('project_id')
     bid_text = data.get('bid')
     amount = float(data.get('amount', 50))
     period = int(data.get('period', 7))
-    project_title = data.get('project_title') or data.get('title') or "Untitled"
-    project_url = data.get('project_url') or data.get('link') or "#"
+    project_title = data.get('project_title') or "Untitled"
+    project_url = data.get('project_url') or "#"
 
-    username = session.get('username')
+    # User details from frontend (from your Node.js auth)
+    user_id = data.get('user_id')
+    user_email = data.get('user_email')
+    role = data.get('role')
 
-    # --- Validation ---
+    # Validation
     if not project_id or not bid_text:
         return jsonify({'error': 'Project ID and bid text required'}), 400
+    
+    if not user_id or not user_email:
+        return jsonify({'error': 'User information required'}), 400
 
-    # --- Duplicate Check ---
-    if bids_collection.find_one({"user_email": username, "link": project_url}):
+    # Duplicate Check - check if user already bid on this project
+    existing_bid = bids_collection.find_one({
+        "user_id": user_id,
+        "link": project_url
+    })
+    
+    if existing_bid:
         return jsonify({
             'success': False,
-            'message': 'Already bid'
+            'message': 'You have already bid on this project'
         }), 409
 
-    # --- Try to get bidder ID (Freelancer self) ---
+    # Try to get bidder ID from Freelancer API (optional)
     bidder_id = None
     try:
         url_self = "https://www.freelancer.com/api/users/0.1/self/"
@@ -447,9 +455,9 @@ def place_bid():
         response.raise_for_status()
         bidder_id = response.json().get("result", {}).get("id")
     except Exception:
-        bidder_id = None  # Not fatal — we'll still store locally
+        bidder_id = None
 
-    # --- Prepare external bid payload ---
+    # Prepare bid payload for Freelancer API
     bid_payload = {
         "project_id": project_id,
         "bidder_id": bidder_id,
@@ -467,7 +475,7 @@ def place_bid():
     external_status = "not_sent"
     external_response = None
 
-    # --- Attempt external submission ---
+    # Try to submit to Freelancer API
     try:
         r = requests.post(
             "https://www.freelancer.com/api/projects/0.1/bids/",
@@ -483,37 +491,206 @@ def place_bid():
     except requests.exceptions.RequestException:
         external_status = "error"
 
-# --- Store bid in MongoDB ---
-    create_bid(
-        user_email=username,
-        title=project_title,
-        link=project_url,
-        amount=amount,
-        period=period,
-        bid_text=bid_text,
-        status=external_status
-    )
+    # Store bid in MongoDB with user information
+    bid_data = {
+        "user_id": user_id,
+        "user_email": user_email,
+        "role": role,
+        "username":  user_email.split('@')[0],
+        "title": project_title,
+        "link": project_url,
+        "project_id": project_id,
+        "amount": amount,
+        "period": period,
+        "bid_text": bid_text,
+        "status": external_status,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+    
+    result = bids_collection.insert_one(bid_data)
 
-    # --- Build response for frontend ---
+    # Return response
     if external_status == "sent":
         return jsonify({
             "success": True,
             "message": "✅ Bid sent successfully!",
+            "bid_id": str(result.inserted_id),
             "external": external_response
         }), 200
-
     elif external_status == "error":
         return jsonify({
             "success": True,
             "message": "⚠️ Bid stored locally (Freelancer API failed).",
+            "bid_id": str(result.inserted_id),
             "external": external_response
         }), 202
-
     else:
         return jsonify({
             "success": True,
-            "message": "✅ Bid saved locally (API not available)."
+            "message": "✅ Bid saved locally (API not available).",
+            "bid_id": str(result.inserted_id)
         }), 202
+    
+
+@app.route('/api/bids/tracker', methods=['GET'])
+def get_bid_tracker():
+    """
+    Get bid tracker data. Expects user_id and role as query parameters.
+    For admin: returns all users' bids grouped by user and date
+    For user: returns only their bids grouped by date
+    """
+    year = request.args.get('year', datetime.now().year, type=int)
+    month = request.args.get('month', datetime.now().month, type=int)
+    user_id = request.args.get('user_id')
+    user_role = request.args.get('role', 'user')
+    
+    if not user_id:
+        return jsonify({'error': 'User ID required'}), 400
+    
+    # Date range for the selected month
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+    
+    if user_role == 'admin':
+        # Get all bids for all users
+        pipeline = [
+            {
+                '$match': {
+                    'created_at': {
+                        '$gte': start_date,
+                        '$lt': end_date
+                    }
+                }
+            },
+            {
+                '$group': {
+                    '_id': {
+                        'user_id': '$user_id',
+                        'username': '$username',
+                        'date': {
+                            '$dateToString': {
+                                'format': '%Y-%m-%d',
+                                'date': '$created_at'
+                            }
+                        }
+                    },
+                    'bids': {
+                        '$push': {
+                            'id': {'$toString': '$_id'},
+                            'title': '$title',
+                            'link': '$link',
+                            'amount': '$amount',
+                            'period': '$period',
+                            'bid_text': '$bid_text',
+                            'status': '$status',
+                            'created_at': '$created_at'
+                        }
+                    },
+                    'total_count': {'$sum': 1},
+                    'total_amount': {'$sum': '$amount'}
+                }
+            },
+            {
+                '$sort': {'_id.date': -1}
+            }
+        ]
+        
+        results = list(bids_collection.aggregate(pipeline))
+        
+        # Group by user
+        users_data = {}
+        for item in results:
+            uid = item['_id']['user_id']
+            uname = item['_id']['username']
+            date = item['_id']['date']
+            
+            if uid not in users_data:
+                users_data[uid] = {
+                    'user_id': uid,
+                    'username': uname,
+                    'dates': {}
+                }
+            
+            users_data[uid]['dates'][date] = {
+                'date': date,
+                'bids': item['bids'],
+                'total_count': item['total_count'],
+                'total_amount': item['total_amount']
+            }
+        
+        return jsonify({
+            'success': True,
+            'year': year,
+            'month': month,
+            'is_admin': True,
+            'users': list(users_data.values())
+        })
+    
+    else:
+        # Get only current user's bids
+        pipeline = [
+            {
+                '$match': {
+                    'user_id': user_id,
+                    'created_at': {
+                        '$gte': start_date,
+                        '$lt': end_date
+                    }
+                }
+            },
+            {
+                '$group': {
+                    '_id': {
+                        '$dateToString': {
+                            'format': '%Y-%m-%d',
+                            'date': '$created_at'
+                        }
+                    },
+                    'bids': {
+                        '$push': {
+                            'id': {'$toString': '$_id'},
+                            'title': '$title',
+                            'link': '$link',
+                            'amount': '$amount',
+                            'period': '$period',
+                            'bid_text': '$bid_text',
+                            'status': '$status',
+                            'created_at': '$created_at'
+                        }
+                    },
+                    'total_count': {'$sum': 1},
+                    'total_amount': {'$sum': '$amount'}
+                }
+            },
+            {
+                '$sort': {'_id': -1}
+            }
+        ]
+        
+        results = list(bids_collection.aggregate(pipeline))
+        
+        dates_data = {}
+        for item in results:
+            date = item['_id']
+            dates_data[date] = {
+                'date': date,
+                'bids': item['bids'],
+                'total_count': item['total_count'],
+                'total_amount': item['total_amount']
+            }
+        
+        return jsonify({
+            'success': True,
+            'year': year,
+            'month': month,
+            'is_admin': False,
+            'dates': dates_data
+        })
+
 
 # -------------------- CUSTOM PROMPT BUILDER --------------------
 def create_personalized_prompt(project, user_details):
