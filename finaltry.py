@@ -188,12 +188,13 @@ def search_projects():
 
     return jsonify(projects)
 
+
 @app.route('/search_with_id', methods=['POST'])
-# @login_required
 def search_with_id():
     import time
     data = request.get_json()
     start_id = data.get('start_id')
+    direction = data.get('direction', 'forward')  # Get search direction
     
     if not start_id:
         return jsonify({"error": "Project ID is required"}), 400
@@ -214,25 +215,33 @@ def search_with_id():
     current_id = start_id
     max_attempts = 50  
     attempts = 0
+    
+    # Determine direction increment
+    id_increment = 1 if direction == 'forward' else -1
 
-    print(f"🔍 Starting project search from ID {start_id} ...")
+    print(f"🔍 Starting project search from ID {start_id} ({direction})...")
 
     while len(projects) < 20 and attempts < max_attempts:
         project_id = current_id
+        
+        # Stop if we go below ID 1 when going backward
+        if project_id < 1:
+            break
+            
         project_ids_checked.append(project_id)
 
         try:
             url = f"https://www.freelancer.com/api/projects/0.1/projects/{project_id}/?full_description=true"
             r = requests.get(url, headers=HEADERS, timeout=10)
 
-            # --- Handle Rate Limiting ---
+            # Handle Rate Limiting
             if r.status_code == 429:
                 retry_after = int(r.headers.get("Retry-After", 5))
                 print(f"⚠️ Rate limit hit at project {project_id}. Waiting {retry_after}s...")
                 time.sleep(retry_after)
                 continue
 
-            # --- Handle successful project fetch ---
+            # Handle successful project fetch
             if r.status_code == 200:
                 response_data = r.json()
                 if response_data.get('status') == 'success':
@@ -248,21 +257,26 @@ def search_with_id():
 
         # Delay between requests to prevent API rate limit
         time.sleep(0.3)
-        current_id += 1
+        current_id += id_increment
         attempts += 1
 
-    # --- No projects found case ---
+    # Calculate last checked ID (the last one we actually checked)
+    last_checked_id = current_id - id_increment
+
+    # No projects found case
     if not projects:
         return jsonify({
             "error": "No projects found in this ID range",
-            "checked_ids": project_ids_checked
+            "checked_ids": project_ids_checked,
+            "last_checked_id": last_checked_id,  # Include even on error
+            "direction": direction
         }), 404
 
-    # --- Collect all unique owner IDs ---
+    # Collect all unique owner IDs
     owner_ids = list(set(p.get('owner_id') for p in projects if p.get('owner_id')))
     clients_data = {}
 
-    # --- Fetch all client data in bulk ---
+    # Fetch all client data in bulk
     if owner_ids:
         try:
             user_ids_param = '&'.join([f'users[]={uid}' for uid in owner_ids])
@@ -285,7 +299,7 @@ def search_with_id():
         except requests.exceptions.RequestException as e:
             print(f"Warning: Could not fetch client data: {e}")
 
-    # --- Format the data for frontend ---
+    # Format the data for frontend
     formatted_projects = []
     for project in projects:
         budget_info = project.get('budget', {}) or {}
@@ -330,15 +344,179 @@ def search_with_id():
             }
         })
 
-    print(f"Search complete: {len(formatted_projects)} valid projects found from ID {start_id} to {current_id - 1}")
+    # Calculate proper start/end IDs based on direction
+    if direction == 'forward':
+        actual_start_id = start_id
+        actual_end_id = last_checked_id
+    else:  # backward
+        actual_start_id = last_checked_id
+        actual_end_id = start_id
+
+    print(f"✅ Search complete: {len(formatted_projects)} projects found")
+    print(f"📊 ID range: {actual_start_id} to {actual_end_id}")
+    print(f"🎯 Last checked ID: {last_checked_id}")
 
     return jsonify({
         'projects': formatted_projects,
-        'start_id': start_id,
-        'end_id': current_id - 1,
+        'start_id': actual_start_id,
+        'end_id': actual_end_id,
+        'last_checked_id': last_checked_id,  # IMPORTANT: Return this!
         'total_found': len(formatted_projects),
-        'checked_ids': project_ids_checked
+        'checked_ids': project_ids_checked,
+        'direction': direction
     })
+
+# @app.route('/search_with_id', methods=['POST'])
+# # @login_required
+# def search_with_id():
+#     import time
+#     data = request.get_json()
+#     start_id = data.get('start_id')
+    
+#     if not start_id:
+#         return jsonify({"error": "Project ID is required"}), 400
+    
+#     try:
+#         start_id = int(start_id)
+#     except ValueError:
+#         return jsonify({"error": "Invalid project ID"}), 400
+
+#     HEADERS = {
+#         "accept": "application/json",
+#         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+#         "Freelancer-OAuth-V1": PROD_TOKEN
+#     }
+
+#     projects = []
+#     project_ids_checked = []
+#     current_id = start_id
+#     max_attempts = 50  
+#     attempts = 0
+
+#     print(f"🔍 Starting project search from ID {start_id} ...")
+
+#     while len(projects) < 20 and attempts < max_attempts:
+#         project_id = current_id
+#         project_ids_checked.append(project_id)
+
+#         try:
+#             url = f"https://www.freelancer.com/api/projects/0.1/projects/{project_id}/?full_description=true"
+#             r = requests.get(url, headers=HEADERS, timeout=10)
+
+#             # --- Handle Rate Limiting ---
+#             if r.status_code == 429:
+#                 retry_after = int(r.headers.get("Retry-After", 5))
+#                 print(f"⚠️ Rate limit hit at project {project_id}. Waiting {retry_after}s...")
+#                 time.sleep(retry_after)
+#                 continue
+
+#             # --- Handle successful project fetch ---
+#             if r.status_code == 200:
+#                 response_data = r.json()
+#                 if response_data.get('status') == 'success':
+#                     project = response_data.get('result')
+#                     if project:
+#                         projects.append(project)
+#                         print(f"✅ Project {project_id} added ({len(projects)} found)")
+#             else:
+#                 print(f"⏭️ Skipping project {project_id}, HTTP {r.status_code}")
+
+#         except requests.exceptions.RequestException as e:
+#             print(f"❌ Error fetching project {project_id}: {e}")
+
+#         # Delay between requests to prevent API rate limit
+#         time.sleep(0.3)
+#         current_id += 1
+#         attempts += 1
+
+#     # --- No projects found case ---
+#     if not projects:
+#         return jsonify({
+#             "error": "No projects found in this ID range",
+#             "checked_ids": project_ids_checked
+#         }), 404
+
+#     # --- Collect all unique owner IDs ---
+#     owner_ids = list(set(p.get('owner_id') for p in projects if p.get('owner_id')))
+#     clients_data = {}
+
+#     # --- Fetch all client data in bulk ---
+#     if owner_ids:
+#         try:
+#             user_ids_param = '&'.join([f'users[]={uid}' for uid in owner_ids])
+#             users_url = f"https://www.freelancer.com/api/users/0.1/users/?{user_ids_param}&employer_reputation=true&jobs=true"
+            
+#             users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+#             if users_response.status_code == 429:
+#                 retry_after = int(users_response.headers.get("Retry-After", 5))
+#                 print(f"Rate limit hit while fetching users. Waiting {retry_after}s...")
+#                 time.sleep(retry_after)
+#                 users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+#             users_response.raise_for_status()
+#             users_result = users_response.json()
+
+#             if users_result.get('status') == 'success':
+#                 clients_data = users_result.get('result', {}).get('users', {})
+
+#         except requests.exceptions.RequestException as e:
+#             print(f"Warning: Could not fetch client data: {e}")
+
+#     # --- Format the data for frontend ---
+#     formatted_projects = []
+#     for project in projects:
+#         budget_info = project.get('budget', {}) or {}
+#         currency_info = project.get('currency', {}) or {}
+#         bid_stats = project.get('bid_stats', {}) or {}
+#         owner_id = project.get('owner_id')
+
+#         client_info = clients_data.get(str(owner_id), {}) if owner_id else {}
+#         employer_reputation = client_info.get('employer_reputation', {}) or {}
+#         entire_history = employer_reputation.get('entire_history', {}) or {}
+#         location = client_info.get('location', {}) or {}
+#         country_info = location.get('country', {}) or {}
+
+#         formatted_projects.append({
+#             'id': project.get('id'),
+#             'seo_url': project.get('seo_url'),
+#             'title': project.get('title', 'N/A'),
+#             'preview_description': (project.get('preview_description') or '').strip(),
+#             'description': (project.get('description') or '').strip(),
+#             'budget': {
+#                 'minimum': budget_info.get('minimum', 0),
+#                 'maximum': budget_info.get('maximum', 0)
+#             },
+#             'currency': {
+#                 'code': currency_info.get('code', 'NA')
+#             },
+#             'bid_stats': {
+#                 'bid_count': bid_stats.get('bid_count', 0),
+#                 'bid_avg': round(float(bid_stats.get('bid_avg') or 0), 2)
+#             },
+#             'client': {
+#                 'id': owner_id,
+#                 'country': country_info.get('name', 'N/A'),
+#                 'rating': {
+#                     'overall': entire_history.get('overall'),
+#                     'on_budget': entire_history.get('on_budget'),
+#                     'on_time': entire_history.get('on_time'),
+#                     'positive': entire_history.get('positive'),
+#                     'reviews': entire_history.get('reviews'),
+#                     'completion_rate': entire_history.get('completion_rate'),
+#                 },
+#             }
+#         })
+
+#     print(f"Search complete: {len(formatted_projects)} valid projects found from ID {start_id} to {current_id - 1}")
+
+#     return jsonify({
+#         'projects': formatted_projects,
+#         'start_id': start_id,
+#         'end_id': current_id - 1,
+#         'total_found': len(formatted_projects),
+#         'checked_ids': project_ids_checked
+#     })
 
 
 @app.route('/generate', methods=['POST'])
