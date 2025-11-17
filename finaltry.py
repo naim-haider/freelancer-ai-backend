@@ -366,159 +366,6 @@ def search_with_id():
         'direction': direction
     })
 
-# @app.route('/search_with_id', methods=['POST'])
-# # @login_required
-# def search_with_id():
-#     import time
-#     data = request.get_json()
-#     start_id = data.get('start_id')
-    
-#     if not start_id:
-#         return jsonify({"error": "Project ID is required"}), 400
-    
-#     try:
-#         start_id = int(start_id)
-#     except ValueError:
-#         return jsonify({"error": "Invalid project ID"}), 400
-
-#     HEADERS = {
-#         "accept": "application/json",
-#         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-#         "Freelancer-OAuth-V1": PROD_TOKEN
-#     }
-
-#     projects = []
-#     project_ids_checked = []
-#     current_id = start_id
-#     max_attempts = 50  
-#     attempts = 0
-
-#     print(f"🔍 Starting project search from ID {start_id} ...")
-
-#     while len(projects) < 20 and attempts < max_attempts:
-#         project_id = current_id
-#         project_ids_checked.append(project_id)
-
-#         try:
-#             url = f"https://www.freelancer.com/api/projects/0.1/projects/{project_id}/?full_description=true"
-#             r = requests.get(url, headers=HEADERS, timeout=10)
-
-#             # --- Handle Rate Limiting ---
-#             if r.status_code == 429:
-#                 retry_after = int(r.headers.get("Retry-After", 5))
-#                 print(f"⚠️ Rate limit hit at project {project_id}. Waiting {retry_after}s...")
-#                 time.sleep(retry_after)
-#                 continue
-
-#             # --- Handle successful project fetch ---
-#             if r.status_code == 200:
-#                 response_data = r.json()
-#                 if response_data.get('status') == 'success':
-#                     project = response_data.get('result')
-#                     if project:
-#                         projects.append(project)
-#                         print(f"✅ Project {project_id} added ({len(projects)} found)")
-#             else:
-#                 print(f"⏭️ Skipping project {project_id}, HTTP {r.status_code}")
-
-#         except requests.exceptions.RequestException as e:
-#             print(f"❌ Error fetching project {project_id}: {e}")
-
-#         # Delay between requests to prevent API rate limit
-#         time.sleep(0.3)
-#         current_id += 1
-#         attempts += 1
-
-#     # --- No projects found case ---
-#     if not projects:
-#         return jsonify({
-#             "error": "No projects found in this ID range",
-#             "checked_ids": project_ids_checked
-#         }), 404
-
-#     # --- Collect all unique owner IDs ---
-#     owner_ids = list(set(p.get('owner_id') for p in projects if p.get('owner_id')))
-#     clients_data = {}
-
-#     # --- Fetch all client data in bulk ---
-#     if owner_ids:
-#         try:
-#             user_ids_param = '&'.join([f'users[]={uid}' for uid in owner_ids])
-#             users_url = f"https://www.freelancer.com/api/users/0.1/users/?{user_ids_param}&employer_reputation=true&jobs=true"
-            
-#             users_response = requests.get(users_url, headers=HEADERS, timeout=15)
-
-#             if users_response.status_code == 429:
-#                 retry_after = int(users_response.headers.get("Retry-After", 5))
-#                 print(f"Rate limit hit while fetching users. Waiting {retry_after}s...")
-#                 time.sleep(retry_after)
-#                 users_response = requests.get(users_url, headers=HEADERS, timeout=15)
-
-#             users_response.raise_for_status()
-#             users_result = users_response.json()
-
-#             if users_result.get('status') == 'success':
-#                 clients_data = users_result.get('result', {}).get('users', {})
-
-#         except requests.exceptions.RequestException as e:
-#             print(f"Warning: Could not fetch client data: {e}")
-
-#     # --- Format the data for frontend ---
-#     formatted_projects = []
-#     for project in projects:
-#         budget_info = project.get('budget', {}) or {}
-#         currency_info = project.get('currency', {}) or {}
-#         bid_stats = project.get('bid_stats', {}) or {}
-#         owner_id = project.get('owner_id')
-
-#         client_info = clients_data.get(str(owner_id), {}) if owner_id else {}
-#         employer_reputation = client_info.get('employer_reputation', {}) or {}
-#         entire_history = employer_reputation.get('entire_history', {}) or {}
-#         location = client_info.get('location', {}) or {}
-#         country_info = location.get('country', {}) or {}
-
-#         formatted_projects.append({
-#             'id': project.get('id'),
-#             'seo_url': project.get('seo_url'),
-#             'title': project.get('title', 'N/A'),
-#             'preview_description': (project.get('preview_description') or '').strip(),
-#             'description': (project.get('description') or '').strip(),
-#             'budget': {
-#                 'minimum': budget_info.get('minimum', 0),
-#                 'maximum': budget_info.get('maximum', 0)
-#             },
-#             'currency': {
-#                 'code': currency_info.get('code', 'NA')
-#             },
-#             'bid_stats': {
-#                 'bid_count': bid_stats.get('bid_count', 0),
-#                 'bid_avg': round(float(bid_stats.get('bid_avg') or 0), 2)
-#             },
-#             'client': {
-#                 'id': owner_id,
-#                 'country': country_info.get('name', 'N/A'),
-#                 'rating': {
-#                     'overall': entire_history.get('overall'),
-#                     'on_budget': entire_history.get('on_budget'),
-#                     'on_time': entire_history.get('on_time'),
-#                     'positive': entire_history.get('positive'),
-#                     'reviews': entire_history.get('reviews'),
-#                     'completion_rate': entire_history.get('completion_rate'),
-#                 },
-#             }
-#         })
-
-#     print(f"Search complete: {len(formatted_projects)} valid projects found from ID {start_id} to {current_id - 1}")
-
-#     return jsonify({
-#         'projects': formatted_projects,
-#         'start_id': start_id,
-#         'end_id': current_id - 1,
-#         'total_found': len(formatted_projects),
-#         'checked_ids': project_ids_checked
-#     })
-
-
 @app.route('/generate', methods=['POST'])
 # @login_required
 def generate_bid_route():
@@ -586,12 +433,83 @@ Team Mactix"""
 
     return jsonify({'bid': graphics_bid})
 
+# profile route
+@app.route('/api/profiles', methods=['GET'])
+def get_profiles():
+    """
+    Get all available freelancer profiles.
+    This endpoint fetches profiles from Freelancer API or returns default profiles.
+    """
+    HEADERS = {
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Freelancer-OAuth-V1": PROD_TOKEN
+    }
+    
+    try:
+        # Try to fetch profiles from Freelancer API
+        url = "https://www.freelancer.com/api/profiles/0.1/profiles/"
+        response = requests.get(url, headers=HEADERS, timeout=15)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('status') == 'success':
+                profiles_data = result.get('result', {}).get('profiles', {})
+                
+                # Format profiles for frontend
+                profiles = []
+                for profile_id, profile_info in profiles_data.items():
+                    profiles.append({
+                        'id': int(profile_id),
+                        'name': profile_info.get('name', 'General'),
+                        'description': profile_info.get('description', '')
+                    })
+                
+                return jsonify({
+                    'success': True,
+                    'profiles': profiles
+                })
+    except Exception as e:
+        print(f"Error fetching profiles from API: {e}")
+    
+    # Return default profiles if API fails
+    default_profiles = [
+        {
+            'id': 0,
+            'name': 'General',
+            'description': 'General freelancing profile'
+        },
+        {
+            'id': 1,
+            'name': 'SEO, Digital Marketing',
+            'description': 'SEO and digital marketing services'
+        },
+        {
+            'id': 2,
+            'name': 'Logo & Illustration',
+            'description': 'Logo design and illustration services'
+        },
+        {
+            'id': 3,
+            'name': 'Graphics & Print Media',
+            'description': 'Graphics and print design services'
+        },
+        {
+            'id': 4,
+            'name': 'PowerPoint & Presentation',
+            'description': 'Presentation design services'
+        }
+    ]
+    
+    return jsonify({
+        'success': True,
+        'profiles': default_profiles
+    })
 
 @app.route('/place_bid', methods=['POST'])
 def place_bid():
     """
-    Places a bid and stores it in MongoDB with user information from frontend.
-    Expects user_id, user_email, and role in the request body.
+    Places a bid and stores it in MongoDB with user information and profile.
     """
     data = request.get_json() or {}
 
@@ -603,10 +521,14 @@ def place_bid():
     project_title = data.get('project_title') or "Untitled"
     project_url = data.get('project_url') or "#"
 
-    # User details from frontend (from your Node.js auth)
+    # User details
     user_id = data.get('user_id')
     user_email = data.get('user_email')
     role = data.get('role')
+
+    # Profile details
+    profile_id = data.get('profile_id', 0)  # Default to General (0)
+    profile_name = data.get('profile_name', 'General')
 
     # Validation
     if not project_id or not bid_text:
@@ -615,10 +537,10 @@ def place_bid():
     if not user_id or not user_email:
         return jsonify({'error': 'User information required'}), 400
 
-    # Duplicate Check - check if user already bid on this project
+    # Duplicate Check
     existing_bid = bids_collection.find_one({
-    "user_id": user_id,
-    "project_id": project_id
+        "user_id": user_id,
+        "project_id": project_id
     })
     
     if existing_bid:
@@ -627,7 +549,7 @@ def place_bid():
             'message': 'You have already bid on this project'
         }), 409
 
-    # Try to get bidder ID from Freelancer API (optional)
+    # Try to get bidder ID from Freelancer API
     bidder_id = None
     try:
         url_self = "https://www.freelancer.com/api/users/0.1/self/"
@@ -638,14 +560,15 @@ def place_bid():
     except Exception:
         bidder_id = None
 
-    # Prepare bid payload for Freelancer API
+    # Prepare bid payload for Freelancer API with profile
     bid_payload = {
         "project_id": project_id,
         "bidder_id": bidder_id,
         "amount": amount,
         "period": period,
         "milestone_percentage": 100,
-        "description": bid_text
+        "description": bid_text,
+        "profile_id": profile_id  # Include profile_id in the bid
     }
 
     headers_post = {
@@ -653,10 +576,7 @@ def place_bid():
         "Content-Type": "application/json"
     }
 
-    external_status = "not_sent"
-    external_response = None
-
-    # Try to submit to Freelancer API
+    # Submit to Freelancer API
     try:
         r = requests.post(
             "https://www.freelancer.com/api/projects/0.1/bids/",
@@ -666,30 +586,31 @@ def place_bid():
         )
         r.raise_for_status()
     except Exception as err:
-        # ❌ DO NOT SAVE IN DB
         return jsonify({
             "success": False,
-            "message": "❌ Failed to submit bid to Freelancer API.",
+            "message": f"❌ Failed to submit bid to Freelancer API: {str(err)}",
             "error": str(err)
         }), 500
     
+    # Get IST timezone
     IST = timezone(timedelta(hours=5, minutes=30))
-
     current_ist = datetime.now(IST).replace(tzinfo=None)
     
-    # Store bid in MongoDB with user information
+    # Store bid in MongoDB with profile information
     bid_data = {
         "user_id": user_id,
         "user_email": user_email,
         "role": role,
-        "username":  user_email.split('@')[0],
+        "username": user_email.split('@')[0],
         "title": project_title,
         "link": project_url,
         "project_id": project_id,
         "amount": amount,
         "period": period,
         "bid_text": bid_text,
-        "status": external_status,
+        "profile_id": profile_id,
+        "profile_name": profile_name,
+        "status": "sent",
         "created_at": current_ist,
         "updated_at": current_ist
     }
@@ -698,7 +619,7 @@ def place_bid():
 
     return jsonify({
         "success": True,
-        "message": "✅ Bid sent successfully and stored!",
+        "message": f"✅ Bid sent successfully using {profile_name} profile!",
         "bid_id": str(result.inserted_id),
         "external": r.json()
     }), 200
