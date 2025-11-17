@@ -628,22 +628,30 @@ def place_bid():
         "external": r.json()
     }), 200
 
-@app.route('/update_bid_status', methods=['POST'])
+@app.route('/api/bids/update-status', methods=['POST'])
 def update_bid_status():
-    data = request.get_json()
-
+    data = request.json
     bid_id = data.get("bid_id")
     new_status = data.get("bid_status")
 
     if not bid_id or not new_status:
-        return jsonify({"error": "Missing bid_id or bid_status"}), 400
+        return jsonify({"success": False, "message": "Missing fields"}), 400
 
-    bids_collection.update_one(
+    valid_status = ["waiting", "shortlisted", "in_progress", "completed", "rejected"]
+
+    if new_status not in valid_status:
+        return jsonify({"success": False, "message": "Invalid status"}), 400
+
+    result = bids_collection.update_one(
         {"_id": ObjectId(bid_id)},
-        {"$set": {"bid_status": new_status, "updated_at": datetime.now()}}
+        {"$set": {"bid_status": new_status}}
     )
 
-    return jsonify({"success": True, "message": "Bid status updated!"}) 
+    if result.modified_count == 0:
+        return jsonify({"success": False, "message": "Bid not found"}), 404
+
+    return jsonify({"success": True, "message": "Bid status updated"})
+
 
 @app.route('/api/bids/tracker', methods=['GET'])
 def get_bid_tracker():
