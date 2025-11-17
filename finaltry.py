@@ -530,7 +530,7 @@ def place_bid():
     role = data.get('role')
 
     # Profile details
-    profile_id = data.get('profile_id', 0)  # Default to General (0)
+    profile_id = data.get('profile_id', 0)  
     profile_name = data.get('profile_name', 'General')
 
     # Validation
@@ -614,6 +614,7 @@ def place_bid():
         "profile_id": profile_id,
         "profile_name": profile_name,
         "status": "sent",
+        "bid_status": "waiting",
         "created_at": current_ist,
         "updated_at": current_ist
     }
@@ -626,7 +627,23 @@ def place_bid():
         "bid_id": str(result.inserted_id),
         "external": r.json()
     }), 200
-    
+
+@app.route('/update_bid_status', methods=['POST'])
+def update_bid_status():
+    data = request.get_json()
+
+    bid_id = data.get("bid_id")
+    new_status = data.get("bid_status")
+
+    if not bid_id or not new_status:
+        return jsonify({"error": "Missing bid_id or bid_status"}), 400
+
+    bids_collection.update_one(
+        {"_id": ObjectId(bid_id)},
+        {"$set": {"bid_status": new_status, "updated_at": datetime.now()}}
+    )
+
+    return jsonify({"success": True, "message": "Bid status updated!"}) 
 
 @app.route('/api/bids/tracker', methods=['GET'])
 def get_bid_tracker():
