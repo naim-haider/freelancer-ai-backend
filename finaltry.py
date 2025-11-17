@@ -450,6 +450,7 @@ def get_profiles():
         # Try to fetch profiles from Freelancer API
         url = "https://www.freelancer.com/api/users/0.1/profiles/"
         response = requests.get(url, headers=HEADERS, timeout=15)
+        print('response profile', response)
         
         if response.status_code == 200:
             result = response.json()
