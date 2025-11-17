@@ -705,6 +705,7 @@ def get_bid_tracker():
                             'link': '$link',
                             'amount': '$amount',
                             'period': '$period',
+                            'bid_status': '$bid_status',
                             'bid_text': '$bid_text',
                             'status': '$status',
                             'created_at': '$created_at'
@@ -777,6 +778,7 @@ def get_bid_tracker():
                             'link': '$link',
                             'amount': '$amount',
                             'period': '$period',
+                            'bid_status': '$bid_status',
                             'bid_text': '$bid_text',
                             'status': '$status',
                             'created_at': '$created_at'
