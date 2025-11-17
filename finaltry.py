@@ -467,6 +467,7 @@ def get_profiles():
                 
                 return jsonify({
                     'success': True,
+                    'name':'api profiles',
                     'profiles': profiles
                 })
     except Exception as e:
@@ -503,6 +504,7 @@ def get_profiles():
     
     return jsonify({
         'success': True,
+        'name':'default profiles',
         'profiles': default_profiles
     })
 
@@ -557,12 +559,10 @@ def place_bid():
         response = requests.get(url_self, headers=headers, timeout=30)
         response.raise_for_status()
         bidder_id = response.json().get("result", {}).get("id")
-    except Exception as e:
-        print(f"Error getting bidder_id: {e}")
+    except Exception:
         bidder_id = None
 
-    # Prepare bid payload for Freelancer API
-    # NOTE: Try different possible parameter names for profile
+    # Prepare bid payload for Freelancer API with profile
     bid_payload = {
         "project_id": project_id,
         "bidder_id": bidder_id,
@@ -570,25 +570,13 @@ def place_bid():
         "period": period,
         "milestone_percentage": 100,
         "description": bid_text,
+        "profile_id": profile_id  # Include profile_id in the bid
     }
-    
-    # Try multiple possible profile parameter names
-    # The Freelancer API documentation should specify the correct one
-    if profile_id != 0:  # Only add if not General (default)
-        bid_payload["profile_id"] = profile_id
-        # Try alternative names if profile_id doesn't work:
-        # bid_payload["profileId"] = profile_id
-        # bid_payload["portfolio_id"] = profile_id
-        # bid_payload["freelancer_profile_id"] = profile_id
 
     headers_post = {
         "Authorization": f"Bearer {PROD_TOKEN}",
         "Content-Type": "application/json"
     }
-
-    # Debug: Print the payload being sent
-    print(f"📤 Sending bid with profile_id: {profile_id} ({profile_name})")
-    print(f"📦 Bid payload: {json.dumps(bid_payload, indent=2)}")
 
     # Submit to Freelancer API
     try:
@@ -598,16 +586,8 @@ def place_bid():
             json=bid_payload,
             timeout=30
         )
-        
-        # Debug: Print response
-        print(f"📥 API Response Status: {r.status_code}")
-        print(f"📥 API Response: {r.text}")
-        
         r.raise_for_status()
-        api_response = r.json()
-        
     except Exception as err:
-        print(f"❌ API Error: {str(err)}")
         return jsonify({
             "success": False,
             "message": f"❌ Failed to submit bid to Freelancer API: {str(err)}",
@@ -641,14 +621,11 @@ def place_bid():
 
     return jsonify({
         "success": True,
-        "message": f"✅ Bid sent successfully using '{profile_name}' profile!",
+        "message": f"✅ Bid sent successfully using {profile_name} profile!",
         "bid_id": str(result.inserted_id),
-        "profile_used": {
-            "id": profile_id,
-            "name": profile_name
-        },
-        "external": api_response
+        "external": r.json()
     }), 200
+    
 
 @app.route('/api/bids/tracker', methods=['GET'])
 def get_bid_tracker():
