@@ -434,79 +434,82 @@ Team Mactix"""
     return jsonify({'bid': graphics_bid})
 
 # profile route
+# profile route
 @app.route('/api/profiles', methods=['GET'])
 def get_profiles():
     """
-    Get all available freelancer profiles.
-    This endpoint fetches profiles from Freelancer API or returns default profiles.
+    Fetch freelancer profiles from Freelancer API.
+    Fallback to default profiles when API fails.
     """
+
     HEADERS = {
         "accept": "application/json",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Freelancer-OAuth-V1": PROD_TOKEN
     }
-    
+
     try:
-        # Try to fetch profiles from Freelancer API
-        url = "https://www.freelancer.com/api/profiles/0.1/profiles/"
+        # Correct Freelancer Profile endpoint
+        url = "https://www.freelancer.com/api/users/0.1/self/"
         response = requests.get(url, headers=HEADERS, timeout=15)
-        
+
         if response.status_code == 200:
-            result = response.json()
-            if result.get('status') == 'success':
-                profiles_data = result.get('result', {}).get('profiles', {})
-                
-                # Format profiles for frontend
+            data = response.json()
+
+            # Ensure API returned proper structure
+            if "result" in data and "user" in data["result"]:
+                user = data["result"]["user"]
+
+                # Profile names appear inside "jobs" or "reputation"
+                jobs = user.get("jobs", [])
+                reputations = user.get("reputation", {}).get("categories", [])
+
                 profiles = []
-                for profile_id, profile_info in profiles_data.items():
+
+                # Extract from jobs
+                for job in jobs:
                     profiles.append({
-                        'id': int(profile_id),
-                        'name': profile_info.get('name', 'General'),
-                        'description': profile_info.get('description', '')
+                        "id": job.get("id"),
+                        "name": job.get("name"),
+                        "description": job.get("seo_url", "")
                     })
-                
-                return jsonify({
-                    'success': True,
-                    'name':'api profiles',
-                    'profiles': profiles
-                })
+
+                # Extract from reputation categories
+                for i, rep in enumerate(reputations):
+                    profiles.append({
+                        "id": rep.get("id", 1000 + i),
+                        "name": rep.get("category_name", "Profile"),
+                        "description": rep.get("category_name", "")
+                    })
+
+                # Remove empty names
+                profiles = [p for p in profiles if p["name"]]
+
+                if profiles:
+                    return jsonify({
+                        "success": True,
+                        "name": "api profiles",
+                        "profiles": profiles
+                    })
+
     except Exception as e:
-        print(f"Error fetching profiles from API: {e}")
-    
-    # Return default profiles if API fails
+        print("Profile API Error:", e)
+
+    # Fallback
     default_profiles = [
-        {
-            'id': 0,
-            'name': 'General',
-            'description': 'General freelancing profile'
-        },
-        {
-            'id': 1,
-            'name': 'SEO, Digital Marketing',
-            'description': 'SEO and digital marketing services'
-        },
-        {
-            'id': 2,
-            'name': 'Logo & Illustration',
-            'description': 'Logo design and illustration services'
-        },
-        {
-            'id': 3,
-            'name': 'Graphics & Print Media',
-            'description': 'Graphics and print design services'
-        },
-        {
-            'id': 4,
-            'name': 'PowerPoint & Presentation',
-            'description': 'Presentation design services'
-        }
+        {"id": 0, "name": "General", "description": "General freelancing profile"},
+        {"id": 1, "name": "SEO, Digital Marketing", "description": "SEO and digital marketing"},
+        {"id": 2, "name": "Logo & Illustration", "description": "Logo and illustration"},
+        {"id": 3, "name": "Graphics & Print Media", "description": "Graphic design and print media"},
+        {"id": 4, "name": "PowerPoint & Presentation", "description": "Presentation design"},
     ]
-    
+
     return jsonify({
-        'success': True,
-        'name':'default profiles',
-        'profiles': default_profiles
+        "success": True,
+        "name": "default profiles",
+        "profiles": default_profiles
     })
+
 
 @app.route('/place_bid', methods=['POST'])
 def place_bid():
