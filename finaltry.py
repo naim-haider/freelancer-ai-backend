@@ -366,6 +366,129 @@ def search_with_id():
         'direction': direction
     })
 
+@app.route('/search_single_project', methods=['POST'])
+def search_single_project():
+    data = request.get_json()
+    project_id = data.get('project_id')
+    
+    if not project_id:
+        return jsonify({"error": "Project ID is required"}), 400
+    
+    try:
+        project_id = int(project_id)
+    except ValueError:
+        return jsonify({"error": "Invalid project ID"}), 400
+
+    HEADERS = {
+        "accept": "application/json",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Freelancer-OAuth-V1": PROD_TOKEN
+    }
+
+    try:
+        url = f"https://www.freelancer.com/api/projects/0.1/projects/{project_id}/?full_description=true"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+
+        # Handle Rate Limiting
+        if r.status_code == 429:
+            retry_after = int(r.headers.get("Retry-After", 5))
+            return jsonify({
+                "error": f"Rate limit hit. Please wait {retry_after} seconds."
+            }), 429
+
+        # Handle successful project fetch
+        if r.status_code == 200:
+            response_data = r.json()
+            if response_data.get('status') == 'success':
+                project = response_data.get('result')
+                if not project:
+                    return jsonify({"error": f"Project {project_id} not found"}), 404
+            else:
+                return jsonify({"error": "Project not found or not accessible"}), 404
+        else:
+            return jsonify({"error": f"Project {project_id} not found (HTTP {r.status_code})"}), 404
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Error fetching project: {str(e)}"}), 500
+
+    # Get owner ID
+    owner_id = project.get('owner_id')
+    client_info = {}
+
+    # Fetch client data if owner exists
+    if owner_id:
+        try:
+            users_url = f"https://www.freelancer.com/api/users/0.1/users/?users[]={owner_id}&employer_reputation=true&jobs=true"
+            users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+            if users_response.status_code == 429:
+                retry_after = int(users_response.headers.get("Retry-After", 5))
+                time.sleep(retry_after)
+                users_response = requests.get(users_url, headers=HEADERS, timeout=15)
+
+            if users_response.status_code == 200:
+                users_result = users_response.json()
+                if users_result.get('status') == 'success':
+                    users_data = users_result.get('result', {}).get('users', {})
+                    client_info = users_data.get(str(owner_id), {})
+
+        except requests.exceptions.RequestException as e:
+            print(f"Warning: Could not fetch client data: {e}")
+
+    # Format the project data
+    budget_info = project.get('budget', {}) or {}
+    currency_info = project.get('currency', {}) or {}
+    bid_stats = project.get('bid_stats', {}) or {}
+    
+    employer_reputation = client_info.get('employer_reputation', {}) or {}
+    entire_history = employer_reputation.get('entire_history', {}) or {}
+    location = client_info.get('location', {}) or {}
+    country_info = location.get('country', {}) or {}
+
+    formatted_project = {
+        'id': project.get('id'),
+        'seo_url': project.get('seo_url'),
+        'title': project.get('title', 'N/A'),
+        'preview_description': (project.get('preview_description') or '').strip(),
+        'description': (project.get('description') or '').strip(),
+        'budget': {
+            'minimum': budget_info.get('minimum', 0),
+            'maximum': budget_info.get('maximum', 0)
+        },
+        'currency': {
+            'code': currency_info.get('code', 'NA')
+        },
+        'bid_stats': {
+            'bid_count': bid_stats.get('bid_count', 0),
+            'bid_avg': round(float(bid_stats.get('bid_avg') or 0), 2)
+        },
+        'bidperiod': project.get('bidperiod', None),
+        'client': {
+            'id': owner_id,
+            'username': client_info.get('username', 'N/A'),
+            'display_name': client_info.get('display_name', 'N/A'),
+            'country': country_info.get('name', 'N/A'),
+            'country_code': country_info.get('code'),
+            'city': location.get('city'),
+            'profile_url': f"https://www.freelancer.com/u/{client_info.get('username', '')}" if client_info.get('username') else None,
+            'rating': {
+                'overall': entire_history.get('overall'),
+                'on_budget': entire_history.get('on_budget'),
+                'on_time': entire_history.get('on_time'),
+                'positive': entire_history.get('positive'),
+                'reviews': entire_history.get('reviews'),
+                'completion_rate': entire_history.get('completion_rate'),
+            },
+            'payment_verified': client_info.get('status', {}).get('payment_verified'),
+            'email_verified': client_info.get('status', {}).get('email_verified'),
+        }
+    }
+
+    return jsonify({
+        'project': formatted_project,
+        'project_id': project_id
+    })
+
 @app.route('/generate', methods=['POST'])
 # @login_required
 def generate_bid_route():
