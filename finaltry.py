@@ -694,7 +694,7 @@ def place_bid():
         "period": period,
         "milestone_percentage": 100,
         "description": bid_text,
-        "profile_id": profile_id  # Include profile_id in the bid
+        "profile_id": profile_id
     }
 
     headers_post = {
@@ -722,7 +722,7 @@ def place_bid():
     IST = timezone(timedelta(hours=5, minutes=30))
     current_ist = datetime.now(IST).replace(tzinfo=None)
     
-    # Store bid in MongoDB with profile information
+    # Store bid in MongoDB with profile information and default bid_status
     bid_data = {
         "user_id": user_id,
         "user_email": user_email,
@@ -737,7 +737,7 @@ def place_bid():
         "profile_id": profile_id,
         "profile_name": profile_name,
         "status": "sent",
-        "bid_status": "waiting",
+        "bid_status": "pending",  # Default status: pending (not seen yet)
         "created_at": current_ist,
         "updated_at": current_ist
     }
@@ -751,8 +751,12 @@ def place_bid():
         "external": r.json()
     }), 200
 
+
 @app.route('/api/bids/update-status', methods=['POST'])
 def update_bid_status():
+    """
+    Update bid status with new valid statuses: pending, bid_seen, response_received, awarded
+    """
     data = request.json
     bid_id = data.get("bid_id")
     new_status = data.get("bid_status")
@@ -760,28 +764,41 @@ def update_bid_status():
     if not bid_id or not new_status:
         return jsonify({"success": False, "message": "Missing fields"}), 400
 
-    valid_status = ["waiting", "shortlisted", "in_progress", "completed", "rejected"]
+    # Updated valid statuses
+    valid_status = ["pending", "bid_seen", "response_received", "awarded"]
 
     if new_status not in valid_status:
         return jsonify({"success": False, "message": "Invalid status"}), 400
 
+    # Get IST timezone for updated_at
+    IST = timezone(timedelta(hours=5, minutes=30))
+    current_ist = datetime.now(IST).replace(tzinfo=None)
+
     result = bids_collection.update_one(
         {"_id": ObjectId(bid_id)},
-        {"$set": {"bid_status": new_status}}
+        {
+            "$set": {
+                "bid_status": new_status,
+                "updated_at": current_ist
+            }
+        }
     )
 
     if result.modified_count == 0:
-        return jsonify({"success": False, "message": "Bid not found"}), 404
+        return jsonify({"success": False, "message": "Bid not found or no changes made"}), 404
 
-    return jsonify({"success": True, "message": "Bid status updated"})
+    return jsonify({
+        "success": True, 
+        "message": f"Bid status updated to {new_status}"
+    })
 
 
 @app.route('/api/bids/tracker', methods=['GET'])
 def get_bid_tracker():
     """
     Get bid tracker data. Expects user_id and role as query parameters.
-    For admin: returns all users' bids grouped by user and date
-    For user: returns only their bids grouped by date
+    For admin: returns all users' bids grouped by user and date with status counts
+    For user: returns only their bids grouped by date with status counts
     """
     year = request.args.get('year', datetime.now().year, type=int)
     month = request.args.get('month', datetime.now().month, type=int)
@@ -799,7 +816,7 @@ def get_bid_tracker():
         end_date = datetime(year, month + 1, 1)
     
     if user_role in ['admin', 'super-admin']:
-        # Get all bids for all users
+        # Get all bids for all users with status counts
         pipeline = [
             {
                 '$match': {
@@ -835,7 +852,28 @@ def get_bid_tracker():
                         }
                     },
                     'total_count': {'$sum': 1},
-                    'total_amount': {'$sum': '$amount'}
+                    'total_amount': {'$sum': '$amount'},
+                    # Count by status
+                    'pending_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'pending']}, 1, 0]
+                        }
+                    },
+                    'bid_seen_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'bid_seen']}, 1, 0]
+                        }
+                    },
+                    'response_received_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'response_received']}, 1, 0]
+                        }
+                    },
+                    'awarded_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'awarded']}, 1, 0]
+                        }
+                    }
                 }
             },
             {
@@ -856,15 +894,37 @@ def get_bid_tracker():
                 users_data[uid] = {
                     'user_id': uid,
                     'username': uname,
-                    'dates': {}
+                    'dates': {},
+                    'total_bids': 0,
+                    'total_amount': 0,
+                    'status_counts': {
+                        'pending': 0,
+                        'bid_seen': 0,
+                        'response_received': 0,
+                        'awarded': 0
+                    }
                 }
             
             users_data[uid]['dates'][date] = {
                 'date': date,
                 'bids': item['bids'],
                 'total_count': item['total_count'],
-                'total_amount': item['total_amount']
+                'total_amount': item['total_amount'],
+                'status_counts': {
+                    'pending': item.get('pending_count', 0),
+                    'bid_seen': item.get('bid_seen_count', 0),
+                    'response_received': item.get('response_received_count', 0),
+                    'awarded': item.get('awarded_count', 0)
+                }
             }
+            
+            # Aggregate user totals
+            users_data[uid]['total_bids'] += item['total_count']
+            users_data[uid]['total_amount'] += item['total_amount']
+            users_data[uid]['status_counts']['pending'] += item.get('pending_count', 0)
+            users_data[uid]['status_counts']['bid_seen'] += item.get('bid_seen_count', 0)
+            users_data[uid]['status_counts']['response_received'] += item.get('response_received_count', 0)
+            users_data[uid]['status_counts']['awarded'] += item.get('awarded_count', 0)
         
         return jsonify({
             'success': True,
@@ -875,7 +935,7 @@ def get_bid_tracker():
         })
     
     else:
-        # Get only current user's bids
+        # Get only current user's bids with status counts
         pipeline = [
             {
                 '$match': {
@@ -908,7 +968,28 @@ def get_bid_tracker():
                         }
                     },
                     'total_count': {'$sum': 1},
-                    'total_amount': {'$sum': '$amount'}
+                    'total_amount': {'$sum': '$amount'},
+                    # Count by status
+                    'pending_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'pending']}, 1, 0]
+                        }
+                    },
+                    'bid_seen_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'bid_seen']}, 1, 0]
+                        }
+                    },
+                    'response_received_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'response_received']}, 1, 0]
+                        }
+                    },
+                    'awarded_count': {
+                        '$sum': {
+                            '$cond': [{'$eq': ['$bid_status', 'awarded']}, 1, 0]
+                        }
+                    }
                 }
             },
             {
@@ -919,23 +1000,48 @@ def get_bid_tracker():
         results = list(bids_collection.aggregate(pipeline))
         
         dates_data = {}
+        month_totals = {
+            'total_bids': 0,
+            'total_amount': 0,
+            'status_counts': {
+                'pending': 0,
+                'bid_seen': 0,
+                'response_received': 0,
+                'awarded': 0
+            }
+        }
+        
         for item in results:
             date = item['_id']
             dates_data[date] = {
                 'date': date,
                 'bids': item['bids'],
                 'total_count': item['total_count'],
-                'total_amount': item['total_amount']
+                'total_amount': item['total_amount'],
+                'status_counts': {
+                    'pending': item.get('pending_count', 0),
+                    'bid_seen': item.get('bid_seen_count', 0),
+                    'response_received': item.get('response_received_count', 0),
+                    'awarded': item.get('awarded_count', 0)
+                }
             }
+            
+            # Aggregate month totals
+            month_totals['total_bids'] += item['total_count']
+            month_totals['total_amount'] += item['total_amount']
+            month_totals['status_counts']['pending'] += item.get('pending_count', 0)
+            month_totals['status_counts']['bid_seen'] += item.get('bid_seen_count', 0)
+            month_totals['status_counts']['response_received'] += item.get('response_received_count', 0)
+            month_totals['status_counts']['awarded'] += item.get('awarded_count', 0)
         
         return jsonify({
             'success': True,
             'year': year,
             'month': month,
             'is_admin': False,
-            'dates': dates_data
+            'dates': dates_data,
+            'month_totals': month_totals
         })
-
 
 # -------------------- CUSTOM PROMPT BUILDER --------------------
 def create_personalized_prompt(project, user_details):
