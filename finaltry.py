@@ -490,8 +490,9 @@ def search_single_project():
     })
 
 @app.route('/generate', methods=['POST'])
+# @login_required
 def generate_bid_route():
-    """Generate a custom bid with robust error handling and retries."""
+    """Generate a custom bid in your required structure."""
     data = request.get_json()
     project = data.get('project', {})
     user_details = data.get('userDetails', {})
@@ -499,198 +500,38 @@ def generate_bid_route():
     if not GEMINI_API_KEY:
         return jsonify({'error': 'Gemini API key is not configured.'}), 500
 
-    # Create the prompt
     prompt = create_personalized_prompt(project, user_details)
-    
-    # Log prompt length for debugging
-    print(f"📝 Prompt length: {len(prompt)} characters")
 
-    # Try with Gemini 2.5 Flash first (faster, cheaper)
-    models = [
-        "gemini-2.5-flash-preview-05-20",
-        "gemini-1.5-flash",  # Fallback 1
-        "gemini-1.5-pro"     # Fallback 2 (more reliable)
-    ]
-    
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
-    
-    for i, model in enumerate(models):
-        try:
-            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-            
-            payload = {
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "topK": 40,
-                    "topP": 0.95,
-                    "maxOutputTokens": 2048,
-                },
-                "safetySettings": [
-                    {
-                        "category": "HARM_CATEGORY_HARASSMENT",
-                        "threshold": "BLOCK_NONE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_HATE_SPEECH",
-                        "threshold": "BLOCK_NONE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "threshold": "BLOCK_NONE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                        "threshold": "BLOCK_NONE"
-                    }
-                ]
-            }
-            
-            print(f"🔄 Attempt {i+1}/{len(models)}: Trying model {model}")
-            
-            # Shorter timeout for first attempts, longer for last
-            timeout = 30 if i < len(models) - 1 else 60
-            
-            response = requests.post(api_url, headers=headers, json=payload, timeout=timeout)
-            
-            # Check for rate limiting
-            if response.status_code == 429:
-                print(f"⚠️ Rate limit hit on {model}")
-                if i < len(models) - 1:
-                    time.sleep(2)  # Wait before trying next model
-                    continue
-                else:
-                    return jsonify({
-                        'error': 'API rate limit exceeded. Please try again in a few seconds.',
-                        'retry': True
-                    }), 429
-            
-            # Check for other errors
-            if response.status_code != 200:
-                print(f"❌ Error from {model}: {response.status_code}")
-                print(f"Response: {response.text[:500]}")
-                if i < len(models) - 1:
-                    continue  # Try next model
-                else:
-                    return jsonify({
-                        'error': f'AI service returned error: {response.status_code}',
-                        'details': response.text[:200]
-                    }), 500
-            
-            result = response.json()
-            
-            # Validate response structure
-            if 'candidates' not in result:
-                print(f"❌ Invalid response structure from {model}")
-                print(f"Response: {result}")
-                if i < len(models) - 1:
-                    continue
-                else:
-                    return jsonify({
-                        'error': 'AI returned invalid response format',
-                        'details': str(result)[:200]
-                    }), 500
-            
-            candidates = result.get('candidates', [])
-            if not candidates:
-                print(f"❌ No candidates in response from {model}")
-                if i < len(models) - 1:
-                    continue
-                else:
-                    return jsonify({
-                        'error': 'AI returned no content. Try again.',
-                        'retry': True
-                    }), 500
-            
-            # Extract text from first candidate
-            candidate = candidates[0]
-            content = candidate.get('content', {})
-            parts = content.get('parts', [])
-            
-            if not parts or 'text' not in parts[0]:
-                print(f"❌ No text in parts from {model}")
-                if i < len(models) - 1:
-                    continue
-                else:
-                    return jsonify({
-                        'error': 'AI returned no text content',
-                        'retry': True
-                    }), 500
-            
-            bid_text = parts[0]['text'].strip()
-            
-            if not bid_text:
-                print(f"❌ Empty bid text from {model}")
-                if i < len(models) - 1:
-                    continue
-                else:
-                    return jsonify({
-                        'error': 'AI returned empty bid',
-                        'retry': True
-                    }), 500
-            
-            print(f"✅ Successfully generated bid using {model}")
-            print(f"📊 Bid length: {len(bid_text)} characters")
-            
-            return jsonify({
-                'bid': bid_text,
-                'model_used': model,
-                'success': True
-            })
-            
-        except requests.exceptions.Timeout:
-            print(f"⏱️ Timeout with {model}")
-            if i < len(models) - 1:
-                continue
-            else:
-                return jsonify({
-                    'error': 'Request timed out. Please try again.',
-                    'retry': True
-                }), 504
-                
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Request exception with {model}: {str(e)}")
-            if i < len(models) - 1:
-                continue
-            else:
-                return jsonify({
-                    'error': f'Network error: {str(e)}',
-                    'retry': True
-                }), 500
-                
-        except Exception as e:
-            print(f"❌ Unexpected error with {model}: {str(e)}")
-            print(f"Error type: {type(e).__name__}")
-            import traceback
-            traceback.print_exc()
-            if i < len(models) - 1:
-                continue
-            else:
-                return jsonify({
-                    'error': f'Unexpected error: {str(e)}',
-                    'retry': True
-                }), 500
-    
-    # If all models failed
-    return jsonify({
-        'error': 'All AI models failed. Please try again later.',
-        'retry': True
-    }), 500
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    try:
+        response = requests.post(api_url, headers=headers, json=payload, timeout=90)
+        response.raise_for_status()
+        result = response.json()
+
+        if 'candidates' in result and result['candidates'][0]['content']['parts'][0]['text']:
+            bid_text = result['candidates'][0]['content']['parts'][0]['text']
+            return jsonify({'bid': bid_text})
+        else:
+            return jsonify({'error': "AI returned no content."}), 500
+
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'AI service error: {e}'}), 500
 
 
 @app.route('/generate_graphics', methods=['POST'])
+# @login_required
 def generate_graphics_bid():
     """Generate a static graphics bid with project details."""
-    try:
-        data = request.get_json()
-        project = data.get('project', {})
-        user_details = data.get('userDetails', {}) 
+    data = request.get_json()
+    project = data.get('project', {})
+    user_details = data.get('userDetails', {}) 
 
-        title = project.get('title', 'your project')
+    title = project.get('title', 'your project')
 
-        graphics_bid = f"""Hello,
+    graphics_bid = f"""Hello,
 We will create Classic Logo for {title}, and I am excited to say that we can do this project with perfection.
  
 We have talented graphic design team to design exclusive premium logos and all printing materials. We can create an awesome logo for your business.
@@ -713,17 +554,8 @@ We look forward to collaborating with you on this project. Please feel free to r
 Warm regards,
 Team Mactix"""
 
-        return jsonify({
-            'bid': graphics_bid,
-            'success': True
-        })
-    except Exception as e:
-        print(f"Error in generate_graphics: {str(e)}")
-        return jsonify({
-            'error': 'Failed to generate graphics bid',
-            'details': str(e)
-        }), 500
-    
+    return jsonify({'bid': graphics_bid})
+
 # profile route
 @app.route('/api/profiles', methods=['GET'])
 def get_profiles():
