@@ -565,14 +565,14 @@ def get_profiles():
     This endpoint fetches profiles from Freelancer API or returns default profiles.
     """
     HEADERS = {
-        "accept": "application/json",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        # "accept": "application/json",
+        # "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Freelancer-OAuth-V1": PROD_TOKEN
     }
     
     try:
         # Try to fetch profiles from Freelancer API
-        url = "https://www.freelancer.com/api/users/0.1/profiles/"
+        url = "https://www.freelancer.com/api/users/0.1/profiles?user_id=85338487&webapp=1&compact=true&new_errors=true&new_pools=true"
         response = requests.get(url, headers=HEADERS, timeout=15)
         print('response profile', response)
         
@@ -738,7 +738,7 @@ def place_bid():
         "profile_id": profile_id,
         "profile_name": profile_name,
         "status": "sent",
-        "bid_status": "pending",  # Default status: pending (not seen yet)
+        "bid_status": "pending",
         "created_at": current_ist,
         "updated_at": current_ist
     }
