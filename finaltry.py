@@ -11,6 +11,7 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import jwt
 import time
+from threading import Lock
 from requests.exceptions import RequestException, HTTPError
 from routes.bid_routes import bid_bp
 from models.bid_model import create_bid, get_user_bids
@@ -619,10 +620,89 @@ def get_profiles():
     })
 
 
+class FreelancerRateLimiter:
+    """
+    Rate limiter for Freelancer API calls.
+    Freelancer typically allows ~100 requests per minute.
+    """
+    def __init__(self, requests_per_minute=60, min_interval=1.0):
+        self.requests_per_minute = requests_per_minute
+        self.min_interval = min_interval  # Minimum seconds between requests
+        self.last_request_time = 0
+        self.request_count = 0
+        self.window_start = time.time()
+        self.lock = Lock()
+    
+    def wait_if_needed(self):
+        """Wait if we need to respect rate limits."""
+        with self.lock:
+            current_time = time.time()
+            
+            # Reset counter if window has passed (1 minute)
+            if current_time - self.window_start >= 60:
+                self.request_count = 0
+                self.window_start = current_time
+            
+            # Check if we've hit the rate limit
+            if self.request_count >= self.requests_per_minute:
+                sleep_time = 60 - (current_time - self.window_start)
+                if sleep_time > 0:
+                    print(f"⏳ Rate limit approaching, waiting {sleep_time:.1f}s...")
+                    time.sleep(sleep_time)
+                    self.request_count = 0
+                    self.window_start = time.time()
+            
+            # Ensure minimum interval between requests
+            time_since_last = current_time - self.last_request_time
+            if time_since_last < self.min_interval:
+                time.sleep(self.min_interval - time_since_last)
+            
+            self.last_request_time = time.time()
+            self.request_count += 1
+
+# Initialize global rate limiter
+rate_limiter = FreelancerRateLimiter(requests_per_minute=50, min_interval=1.2)
+
+
+# ============== RETRY DECORATOR ==============
+def retry_on_rate_limit(max_retries=3, base_delay=5):
+    """
+    Decorator to retry API calls on 429 errors with exponential backoff.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 429:
+                        last_exception = e
+                        
+                        # Get retry-after header if available
+                        retry_after = int(e.response.headers.get('Retry-After', base_delay * (2 ** attempt)))
+                        
+                        if attempt < max_retries:
+                            print(f"⚠️ Rate limit hit (attempt {attempt + 1}/{max_retries + 1}). Waiting {retry_after}s...")
+                            time.sleep(retry_after)
+                        else:
+                            raise
+                    else:
+                        raise
+                except Exception as e:
+                    raise
+            
+            raise last_exception
+        return wrapper
+    return decorator
+
+
 @app.route('/place_bid', methods=['POST'])
 def place_bid():
     """
-    Places a bid with profile selection.
+    Places a bid with profile selection and rate limit handling.
     """
     data = request.get_json() or {}
 
@@ -640,8 +720,8 @@ def place_bid():
     user_email = data.get('user_email')
     role = data.get('role')
 
-    # Profile details - use the actual profile_id from API
-    profile_id = data.get('profile_id')  # This should be the real ID like 20859
+    # Profile details
+    profile_id = data.get('profile_id')
     profile_name = data.get('profile_name', 'General')
 
     # Validation
@@ -664,9 +744,9 @@ def place_bid():
         }), 409
 
     # Get bidder ID
-    bidder_id = 85338487  # Your user ID
-    
-    # Prepare bid payload - matching the working curl format
+    bidder_id = 85338487
+
+    # Prepare bid payload
     bid_payload = {
         "project_id": int(project_id),
         "bidder_id": bidder_id,
@@ -676,8 +756,7 @@ def place_bid():
         "description": bid_text
     }
     
-    # Only add profile_id if it's a valid API profile ID (not default 0-4)
-    if profile_id and profile_id > 100:  # Real API profile IDs are large numbers
+    if profile_id and profile_id > 100:
         bid_payload["profile_id"] = profile_id
 
     headers_post = {
@@ -685,41 +764,104 @@ def place_bid():
         "Content-Type": "application/json"
     }
 
-    print(f"Submitting bid payload: {bid_payload}")
+    print(f"📤 Submitting bid for project {project_id}...")
 
-    # Submit to Freelancer API
-    try:
-        r = requests.post(
-            "https://www.freelancer.com/api/projects/0.1/bids/?compact=true&new_errors=true&new_pools=true",
-            headers=headers_post,
-            json=bid_payload,
-            timeout=30
-        )
-        
-        response_data = r.json()
-        print(f"Freelancer API response: {response_data}")
-        
-        if response_data.get('status') != 'success':
-            error_msg = response_data.get('message', 'Unknown error from Freelancer API')
+    # ========== RATE LIMIT HANDLING ==========
+    max_retries = 3
+    base_delay = 5
+    response_data = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Wait if needed to respect rate limits
+            rate_limiter.wait_if_needed()
+            
+            r = requests.post(
+                "https://www.freelancer.com/api/projects/0.1/bids/?compact=true&new_errors=true&new_pools=true",
+                headers=headers_post,
+                json=bid_payload,
+                timeout=30
+            )
+            
+            # Handle 429 specifically
+            if r.status_code == 429:
+                retry_after = int(r.headers.get('Retry-After', base_delay * (2 ** attempt)))
+                
+                if attempt < max_retries:
+                    print(f"⚠️ Rate limit hit (attempt {attempt + 1}/{max_retries + 1}). Waiting {retry_after}s...")
+                    time.sleep(retry_after)
+                    continue
+                else:
+                    return jsonify({
+                        "success": False,
+                        "message": f"❌ Rate limit exceeded. Please wait {retry_after} seconds before trying again.",
+                        "retry_after": retry_after,
+                        "error": "RATE_LIMIT_EXCEEDED"
+                    }), 429
+            
+            # Parse response
+            response_data = r.json()
+            print(f"✅ Freelancer API response: {response_data.get('status')}")
+            
+            # Check for success
+            if response_data.get('status') != 'success':
+                error_msg = response_data.get('message', 'Unknown error from Freelancer API')
+                
+                # Check for specific error codes
+                request_status = response_data.get('request_status')
+                if request_status:
+                    error_code = request_status.get('error_code')
+                    if error_code:
+                        error_msg = f"{error_msg} (Code: {error_code})"
+                
+                return jsonify({
+                    "success": False,
+                    "message": f"❌ {error_msg}",
+                    "error": response_data
+                }), 400
+            
+            # Success - break out of retry loop
+            break
+            
+        except requests.exceptions.Timeout:
+            if attempt < max_retries:
+                print(f"⏱️ Request timeout (attempt {attempt + 1}). Retrying...")
+                time.sleep(2)
+                continue
             return jsonify({
                 "success": False,
-                "message": f"❌ Freelancer API Error: {error_msg}",
-                "error": response_data
-            }), 400
+                "message": "❌ Request timed out. Please try again.",
+                "error": "TIMEOUT"
+            }), 504
             
-    except Exception as err:
-        print(f"API Error: {err}")
+        except requests.exceptions.RequestException as err:
+            print(f"❌ API Error: {err}")
+            return jsonify({
+                "success": False,
+                "message": f"❌ Failed to submit bid: {str(err)}",
+                "error": str(err)
+            }), 500
+        
+        except Exception as err:
+            print(f"❌ Unexpected error: {err}")
+            return jsonify({
+                "success": False,
+                "message": f"❌ Unexpected error: {str(err)}",
+                "error": str(err)
+            }), 500
+
+    # If we get here without response_data, something went wrong
+    if not response_data:
         return jsonify({
             "success": False,
-            "message": f"❌ Failed to submit bid: {str(err)}",
-            "error": str(err)
+            "message": "❌ Failed to get response from Freelancer API",
+            "error": "NO_RESPONSE"
         }), 500
-    
-    # Get IST timezone
+
+    # Store in MongoDB
     IST = timezone(timedelta(hours=5, minutes=30))
     current_ist = datetime.now(IST).replace(tzinfo=None)
     
-    # Store bid in MongoDB
     bid_data = {
         "user_id": user_id,
         "user_email": user_email,
