@@ -557,86 +557,72 @@ Team Mactix"""
 
     return jsonify({'bid': graphics_bid})
 
-# profile route
 @app.route('/api/profiles', methods=['GET'])
 def get_profiles():
     """
     Get all available freelancer profiles.
-    This endpoint fetches profiles from Freelancer API or returns default profiles.
     """
     HEADERS = {
-        # "accept": "application/json",
-        # "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Freelancer-OAuth-V1": PROD_TOKEN
     }
     
     try:
-        # Try to fetch profiles from Freelancer API
         url = "https://www.freelancer.com/api/users/0.1/profiles?user_id=85338487&webapp=1&compact=true&new_errors=true&new_pools=true"
         response = requests.get(url, headers=HEADERS, timeout=15)
-        print('response profile', response)
+        print('response profile', response.status_code)
         
         if response.status_code == 200:
             result = response.json()
+            print('API Result:', result)
+            
             if result.get('status') == 'success':
-                profiles_data = result.get('result', {}).get('profiles', {})
+                # API returns profiles as an ARRAY, not a dict
+                profiles_data = result.get('result', {}).get('profiles', [])
                 
                 # Format profiles for frontend
                 profiles = []
-                for profile_id, profile_info in profiles_data.items():
+                for profile in profiles_data:
                     profiles.append({
-                        'id': int(profile_id),
-                        'name': profile_info.get('name', 'General'),
-                        'description': profile_info.get('description', '')
+                        'id': profile.get('id'),
+                        'name': profile.get('profile_name', 'General'),
+                        'description': profile.get('tagline', profile.get('description', '')[:100] if profile.get('description') else ''),
+                        'hourly_rate': profile.get('hourly_rate'),
+                        'status': profile.get('status'),
+                        'is_default': profile.get('is_default', False)
                     })
+                
+                # Sort by is_default first, then by id
+                profiles.sort(key=lambda x: (not x.get('is_default', False), x.get('id', 0)))
                 
                 return jsonify({
                     'success': True,
-                    'name':'api profiles',
+                    'source': 'api',
                     'profiles': profiles
                 })
+                
     except Exception as e:
         print(f"Error fetching profiles from API: {e}")
     
     # Return default profiles if API fails
     default_profiles = [
-        {
-            'id': 0,
-            'name': 'General',
-            'description': 'General freelancing profile'
-        },
-        {
-            'id': 1,
-            'name': 'SEO, Digital Marketing',
-            'description': 'SEO and digital marketing services'
-        },
-        {
-            'id': 2,
-            'name': 'Logo & Illustration',
-            'description': 'Logo design and illustration services'
-        },
-        {
-            'id': 3,
-            'name': 'Graphics & Print Media',
-            'description': 'Graphics and print design services'
-        },
-        {
-            'id': 4,
-            'name': 'PowerPoint & Presentation',
-            'description': 'Presentation design services'
-        }
+        {'id': 0, 'name': 'General', 'description': 'General freelancing profile'},
+        {'id': 1, 'name': 'SEO, Digital Marketing', 'description': 'SEO and digital marketing services'},
+        {'id': 2, 'name': 'Logo & Illustration', 'description': 'Logo design and illustration services'},
+        {'id': 3, 'name': 'Graphics & Print Media', 'description': 'Graphics and print design services'},
+        {'id': 4, 'name': 'PowerPoint & Presentation', 'description': 'Presentation design services'}
     ]
     
     return jsonify({
         'success': True,
-        'name':'default profiles',
+        'source': 'default',
         'profiles': default_profiles
     })
+
 
 @app.route('/place_bid', methods=['POST'])
 def place_bid():
     """
-    Places a bid and stores it in MongoDB with user information and profile.
+    Places a bid with profile selection.
     """
     data = request.get_json() or {}
 
@@ -645,6 +631,7 @@ def place_bid():
     bid_text = data.get('bid')
     amount = float(data.get('amount', 50))
     period = int(data.get('period', 7))
+    milestone_percentage = int(data.get('milestone_percentage', 100))
     project_title = data.get('project_title') or "Untitled"
     project_url = data.get('project_url') or "#"
 
@@ -653,8 +640,8 @@ def place_bid():
     user_email = data.get('user_email')
     role = data.get('role')
 
-    # Profile details
-    profile_id = data.get('profile_id', 0)  
+    # Profile details - use the actual profile_id from API
+    profile_id = data.get('profile_id')  # This should be the real ID like 20859
     profile_name = data.get('profile_name', 'General')
 
     # Validation
@@ -676,46 +663,55 @@ def place_bid():
             'message': 'You have already bid on this project'
         }), 409
 
-    # Try to get bidder ID from Freelancer API
-    bidder_id = None
-    try:
-        url_self = "https://www.freelancer.com/api/users/0.1/self/"
-        headers = {"Authorization": f"Bearer {PROD_TOKEN}"}
-        response = requests.get(url_self, headers=headers, timeout=30)
-        response.raise_for_status()
-        bidder_id = response.json().get("result", {}).get("id")
-    except Exception:
-        bidder_id = None
-
-    # Prepare bid payload for Freelancer API with profile
+    # Get bidder ID
+    bidder_id = 85338487  # Your user ID
+    
+    # Prepare bid payload - matching the working curl format
     bid_payload = {
-        "project_id": project_id,
+        "project_id": int(project_id),
         "bidder_id": bidder_id,
         "amount": amount,
         "period": period,
-        "milestone_percentage": 100,
-        "description": bid_text,
-        "profile_id": profile_id
+        "milestone_percentage": milestone_percentage,
+        "description": bid_text
     }
+    
+    # Only add profile_id if it's a valid API profile ID (not default 0-4)
+    if profile_id and profile_id > 100:  # Real API profile IDs are large numbers
+        bid_payload["profile_id"] = profile_id
 
     headers_post = {
-        "Authorization": f"Bearer {PROD_TOKEN}",
+        "Freelancer-OAuth-V1": PROD_TOKEN,
         "Content-Type": "application/json"
     }
+
+    print(f"Submitting bid payload: {bid_payload}")
 
     # Submit to Freelancer API
     try:
         r = requests.post(
-            "https://www.freelancer.com/api/projects/0.1/bids/",
+            "https://www.freelancer.com/api/projects/0.1/bids/?compact=true&new_errors=true&new_pools=true",
             headers=headers_post,
             json=bid_payload,
             timeout=30
         )
-        r.raise_for_status()
+        
+        response_data = r.json()
+        print(f"Freelancer API response: {response_data}")
+        
+        if response_data.get('status') != 'success':
+            error_msg = response_data.get('message', 'Unknown error from Freelancer API')
+            return jsonify({
+                "success": False,
+                "message": f"❌ Freelancer API Error: {error_msg}",
+                "error": response_data
+            }), 400
+            
     except Exception as err:
+        print(f"API Error: {err}")
         return jsonify({
             "success": False,
-            "message": f"❌ Failed to submit bid to Freelancer API: {str(err)}",
+            "message": f"❌ Failed to submit bid: {str(err)}",
             "error": str(err)
         }), 500
     
@@ -723,7 +719,7 @@ def place_bid():
     IST = timezone(timedelta(hours=5, minutes=30))
     current_ist = datetime.now(IST).replace(tzinfo=None)
     
-    # Store bid in MongoDB with profile information and default bid_status
+    # Store bid in MongoDB
     bid_data = {
         "user_id": user_id,
         "user_email": user_email,
@@ -739,6 +735,7 @@ def place_bid():
         "profile_name": profile_name,
         "status": "sent",
         "bid_status": "pending",
+        "freelancer_bid_id": response_data.get('result', {}).get('id'),
         "created_at": current_ist,
         "updated_at": current_ist
     }
@@ -747,11 +744,10 @@ def place_bid():
 
     return jsonify({
         "success": True,
-        "message": f"✅ Bid sent successfully using {profile_name} profile!",
+        "message": f"✅ Bid sent successfully using '{profile_name}' profile!",
         "bid_id": str(result.inserted_id),
-        "external": r.json()
+        "freelancer_response": response_data
     }), 200
-
 
 @app.route('/api/bids/update-status', methods=['POST'])
 def update_bid_status():
