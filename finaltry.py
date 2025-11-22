@@ -561,7 +561,8 @@ Team Mactix"""
 @app.route('/api/profiles', methods=['GET'])
 def get_profiles():
     """
-    Get all available freelancer profiles.
+    Get all available freelancer profiles including the default General profile.
+    The Freelancer API only returns custom profiles, not the default one.
     """
     HEADERS = {
         "Freelancer-OAuth-V1": PROD_TOKEN
@@ -574,31 +575,40 @@ def get_profiles():
         
         if response.status_code == 200:
             result = response.json()
-            print('API Result:', result)
             
             if result.get('status') == 'success':
-                # API returns profiles as an ARRAY, not a dict
                 profiles_data = result.get('result', {}).get('profiles', [])
                 
-                # Format profiles for frontend
-                profiles = []
+                profiles = [
+                    {
+                        'id': 0, 
+                        'name': 'General',
+                        'description': 'Default freelancing profile (no specific specialty)',
+                        'hourly_rate': None,
+                        'status': 'active',
+                        'is_default': True  
+                    }
+                ]
+                
+                # Add custom profiles from API
                 for profile in profiles_data:
                     profiles.append({
                         'id': profile.get('id'),
-                        'name': profile.get('profile_name', 'General'),
-                        'description': profile.get('tagline', profile.get('description', '')[:100] if profile.get('description') else ''),
+                        'name': profile.get('profile_name', 'Unknown'),
+                        'description': profile.get('tagline') or (profile.get('description', '')[:100] if profile.get('description') else ''),
                         'hourly_rate': profile.get('hourly_rate'),
                         'status': profile.get('status'),
-                        'is_default': profile.get('is_default', False)
+                        'is_default': False
                     })
                 
-                # Sort by is_default first, then by id
-                profiles.sort(key=lambda x: (not x.get('is_default', False), x.get('id', 0)))
+                # Sort: General first (is_default=True), then by profile name
+                profiles.sort(key=lambda x: (not x.get('is_default', False), x.get('name', '')))
                 
                 return jsonify({
                     'success': True,
                     'source': 'api',
-                    'profiles': profiles
+                    'profiles': profiles,
+                    'total': len(profiles)
                 })
                 
     except Exception as e:
@@ -606,17 +616,18 @@ def get_profiles():
     
     # Return default profiles if API fails
     default_profiles = [
-        {'id': 0, 'name': 'General', 'description': 'General freelancing profile'},
-        {'id': 1, 'name': 'SEO, Digital Marketing', 'description': 'SEO and digital marketing services'},
-        {'id': 2, 'name': 'Logo & Illustration', 'description': 'Logo design and illustration services'},
-        {'id': 3, 'name': 'Graphics & Print Media', 'description': 'Graphics and print design services'},
-        {'id': 4, 'name': 'PowerPoint & Presentation', 'description': 'Presentation design services'}
+        {'id': 0, 'name': 'General', 'description': 'Default freelancing profile', 'is_default': True},
+        {'id': 1, 'name': 'SEO, Digital Marketing', 'description': 'SEO and digital marketing services', 'is_default': False},
+        {'id': 2, 'name': 'Logo & Illustration', 'description': 'Logo design and illustration services', 'is_default': False},
+        {'id': 3, 'name': 'Graphics & Print Media', 'description': 'Graphics and print design services', 'is_default': False},
+        {'id': 4, 'name': 'PowerPoint & Presentation', 'description': 'Presentation design services', 'is_default': False}
     ]
     
     return jsonify({
         'success': True,
         'source': 'default',
-        'profiles': default_profiles
+        'profiles': default_profiles,
+        'total': len(default_profiles)
     })
 
 
@@ -755,9 +766,9 @@ def place_bid():
         "milestone_percentage": milestone_percentage,
         "description": bid_text
     }
-    
-    if profile_id and profile_id > 100:
-        bid_payload["profile_id"] = profile_id
+
+    if profile_id and int(profile_id) > 0:
+        bid_payload["profile_id"] = int(profile_id)
 
     headers_post = {
         "Freelancer-OAuth-V1": PROD_TOKEN,
