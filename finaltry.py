@@ -195,7 +195,7 @@ def search_with_id():
     import time
     data = request.get_json()
     start_id = data.get('start_id')
-    direction = data.get('direction', 'forward')  # Get search direction
+    direction = data.get('direction', 'forward') 
     
     if not start_id:
         return jsonify({"error": "Project ID is required"}), 400
@@ -214,7 +214,7 @@ def search_with_id():
     projects = []
     project_ids_checked = []
     current_id = start_id
-    max_attempts = 50  
+    max_attempts = 40  
     attempts = 0
     
     # Determine direction increment
@@ -269,7 +269,7 @@ def search_with_id():
         return jsonify({
             "error": "No projects found in this ID range",
             "checked_ids": project_ids_checked,
-            "last_checked_id": last_checked_id,  # Include even on error
+            "last_checked_id": last_checked_id, 
             "direction": direction
         }), 404
 
@@ -355,13 +355,14 @@ def search_with_id():
 
     print(f"✅ Search complete: {len(formatted_projects)} projects found")
     print(f"📊 ID range: {actual_start_id} to {actual_end_id}")
+    print(f"📊 Total Id Searched: {actual_end_id - actual_start_id }")
     print(f"🎯 Last checked ID: {last_checked_id}")
 
     return jsonify({
         'projects': formatted_projects,
         'start_id': actual_start_id,
         'end_id': actual_end_id,
-        'last_checked_id': last_checked_id,  # IMPORTANT: Return this!
+        'last_checked_id': last_checked_id,  
         'total_found': len(formatted_projects),
         'checked_ids': project_ids_checked,
         'direction': direction
